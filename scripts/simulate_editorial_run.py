@@ -1,0 +1,168 @@
+import os
+import sys
+import json
+import uuid
+import asyncio
+from datetime import date, datetime, timezone, timedelta
+from typing import List, Dict, Any
+
+from backend.app.core.config import settings
+from backend.app.services.scoring import ScoringEngine
+from backend.app.services.deduplication import DeduplicationService
+from backend.app.services.searxng import SearXNGClient
+from backend.app.services.firecrawl import FirecrawlClient
+from backend.app.services.url_validator import URLValidatorService
+from editorial_mcp.client import EditorialMCPSyncClient as EditorialClient
+
+# Diverse publishers: Frontier Lab (DeepMind), Academic Paper (arXiv), Systems Framework (PyTorch),
+# Silicon/Hardware (NVIDIA), Open Runtime (GitHub/vLLM), Standards Body (NIST), Model Hub (Hugging Face)
+DEMO_CANDIDATES = [
+    {
+        "image_url": "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=1200&q=80",
+        "title": "Google DeepMind Demonstrates Real-Time Diagnostic Verification Models with Sub-Second Latency",
+        "url": "https://deepmind.google/research/breakthroughs/",
+        "summary": "DeepMind published empirical evaluations demonstrating real-time interactive medical foundation model reasoning operating under 500ms latency budgets on custom TPU clusters.",
+        "why_it_matters": "Unlocks conversational clinical second-opinions and real-time verification previously hindered by memory-bandwidth serialization delays.",
+        "category_slugs": ["ai-models", "research"],
+        "publisher": "Google DeepMind Research",
+        "published_at": "2026-09-13T08:30:00Z",
+        "significance": 9.4,
+        "novelty": 8.9,
+        "evidence": 9.5,
+        "saturation": 2.0,
+        "is_lead": True,
+    },
+    {
+        "image_url": "https://images.unsplash.com/photo-1620712943543-bcc4688e7485?auto=format&fit=crop&w=1200&q=80",
+        "title": "ArXiv Paper Formalizes Test-Time Compute Scaling Laws for Spatial and Robotic Verification",
+        "url": "https://arxiv.org/abs/2408.03314",
+        "summary": "Researchers published empirical proof that test-time search with verifier networks scales visual reasoning and trajectory planning accuracy predictably alongside token compute budgets.",
+        "why_it_matters": "Confirms that compute-at-inference paradigms translate beyond text-based mathematics into physical embodiment, robotic control, and spatial reasoning.",
+        "category_slugs": ["research", "robotics"],
+        "publisher": "arXiv:2408.03314",
+        "published_at": "2026-09-13T09:15:00Z",
+        "significance": 9.1,
+        "novelty": 8.6,
+        "evidence": 9.3,
+        "saturation": 2.4,
+        "is_lead": False,
+    },
+    {
+        "image_url": "https://images.unsplash.com/photo-1558494949-ef010cbdcc31?auto=format&fit=crop&w=1200&q=80",
+        "title": "PyTorch Foundation Merges Async Pipeline Parallelism with Native FP8 GEMM Compilation",
+        "url": "https://pytorch.org/blog/",
+        "summary": "PyTorch master integrated asynchronous pipeline scheduling overlapping multi-node communication with tensor computation alongside native torch.compile FP8 GEMM primitives.",
+        "why_it_matters": "Eliminates distributed bubble latency across multi-node GPU clusters, delivering 28% higher accelerator utilization on frontier training runs.",
+        "category_slugs": ["developer-tools", "infrastructure"],
+        "publisher": "PyTorch Foundation",
+        "published_at": "2026-09-13T10:00:00Z",
+        "significance": 8.8,
+        "novelty": 8.2,
+        "evidence": 9.1,
+        "saturation": 2.9,
+        "is_lead": False,
+    },
+    {
+        "image_url": "https://images.unsplash.com/photo-1591488320449-011701bb6704?auto=format&fit=crop&w=1200&q=80",
+        "title": "NVIDIA Developer Technical Report Profiles Multi-Node Speculative Prefill Acceleration",
+        "url": "https://developer.nvidia.com/blog/",
+        "summary": "NVIDIA systems engineers published technical benchmarks detailing multi-GPU memory tiling and disaggregated prefill/decode cluster topologies for long chain-of-thought models.",
+        "why_it_matters": "Reduces datacenter power draw by 35% during long-context prompt processing, mitigating power envelope limits in enterprise AI datacenters.",
+        "category_slugs": ["hardware", "infrastructure"],
+        "publisher": "NVIDIA Developer",
+        "published_at": "2026-09-13T11:20:00Z",
+        "significance": 8.6,
+        "novelty": 8.1,
+        "evidence": 9.0,
+        "saturation": 2.7,
+        "is_lead": False,
+    },
+    {
+        "image_url": "https://images.unsplash.com/photo-1526374965328-7f61d4dc18c5?auto=format&fit=crop&w=1200&q=80",
+        "title": "vLLM Project Merges Speculative Chunked Prefill Architecture for Multi-Turn Reasoning",
+        "url": "https://github.com/vllm-project/vllm",
+        "summary": "The open-source vLLM project merged a major scheduler overhaul combining chunked prefill with speculative draft decoding tailored for long reasoning traces.",
+        "why_it_matters": "Cuts per-token inference serving costs fourfold for reasoning-intensive models without requiring architectural retraining.",
+        "category_slugs": ["open-ai", "infrastructure"],
+        "publisher": "GitHub / vLLM Project",
+        "published_at": "2026-09-13T07:45:00Z",
+        "significance": 8.5,
+        "novelty": 8.3,
+        "evidence": 8.9,
+        "saturation": 2.2,
+        "is_lead": False,
+    },
+    {
+        "image_url": "https://images.unsplash.com/photo-1507413245164-6160d8298b31?auto=format&fit=crop&w=1200&q=80",
+        "title": "NIST Publishes Binding Evaluation Metrics for Autonomous Agent Boundary Validation",
+        "url": "https://www.nist.gov/itl/ai-risk-management-framework",
+        "summary": "The National Institute of Standards and Technology released standardized evaluation suites measuring tool misfires and containment failures in autonomous multi-agent environments.",
+        "why_it_matters": "Establishes legal and engineering compliance baselines for companies deploying autonomous coding and operational agents in critical infrastructure.",
+        "category_slugs": ["governance"],
+        "publisher": "NIST AI Risk Management",
+        "published_at": "2026-09-12T16:00:00Z",
+        "significance": 8.2,
+        "novelty": 8.0,
+        "evidence": 9.0,
+        "saturation": 2.1,
+        "is_lead": False,
+    },
+    {
+        "image_url": "https://images.unsplash.com/photo-1677442136019-21780efad99a?auto=format&fit=crop&w=1200&q=80",
+        "title": "Hugging Face Research Hub Expands 4-Bit KV-Cache Sharding for 128k Context Windows",
+        "url": "https://huggingface.co/blog",
+        "summary": "Hugging Face updated its inference and quantization libraries with native 4-bit key-value cache quantization and cross-node tensor sharding.",
+        "why_it_matters": "Enables engineers to serve ultra-long context windows on commodity hardware nodes without sacrificing output quality.",
+        "category_slugs": ["open-ai", "developer-tools"],
+        "publisher": "Hugging Face Research",
+        "published_at": "2026-09-12T18:00:00Z",
+        "significance": 8.0,
+        "novelty": 7.9,
+        "evidence": 8.7,
+        "saturation": 2.5,
+        "is_lead": False,
+    },
+]
+
+REJECTED_SAMPLE_CANDIDATES = [
+    {
+        "title": "DeepSeek Releases Open-Weight MoE V3 with Sub-Millisecond Routing Kernels",
+        "url": "https://github.com/deepseek-ai/DeepSeek-V3",
+        "summary": "Historical release of DeepSeek V3 open-weight model from late 2024.",
+        "why_it_matters": "Historic milestone, but published well outside current news cycle.",
+        "category_slugs": ["ai-models", "open-ai"],
+        "publisher": "GitHub / DeepSeek",
+        "published_at": "2024-12-26T00:00:00Z",
+        "significance": 9.0,
+        "novelty": 4.0,
+        "evidence": 9.5,
+        "saturation": 9.0,
+        "rejected_reason": "Rejected: Story is stale (published 2024-12-26 is older than 48-hour lookback window)",
+    },
+    {
+        "title": "Startup Claims Revolutionary Groundbreaking General Intelligence with Zero Compute",
+        "url": "https://example.com/broken-marketing-announcement-404",
+        "summary": "Sensational press release claiming AGI without verifiable benchmark figures or peer-reviewed papers.",
+        "category_slugs": ["research"],
+        "publisher": "PR Newswire",
+        "published_at": "2026-09-13T10:00:00Z",
+        "significance": 1.0,
+        "novelty": 1.0,
+        "evidence": 1.0,
+        "saturation": 8.5,
+        "rejected_reason": "Rejected: Primary source URL returned HTTP 404 (failed 200 OK validation)",
+    },
+    {
+        "title": "Celebrity Posts Personal Speculation on Future AI Consciousness",
+        "url": "https://example.com/social-media-post-unverified-404",
+        "summary": "Social media commentary discussing philosophical implications of artificial intelligence.",
+        "category_slugs": ["governance"],
+        "publisher": "Social Media",
+        "published_at": "2026-09-13T08:00:00Z",
+        "significance": 1.0,
+        "novelty": 1.0,
+        "evidence": 1.0,
+        "saturation": 9.0,
+        "rejected_reason": "Rejected: Scope violation. Non-technical opinion piece without systems relevance.",
+    },
+]

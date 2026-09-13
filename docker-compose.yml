@@ -1,0 +1,22 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ainews-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-ainews}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ainews_secret}
+      POSTGRES_DB: ${POSTGRES_DB:-ainews}
+    ports:
+      - "5432:5432"
+    volumes:
+      - ainews_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ainews} -d ${POSTGRES_DB:-ainews}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  ainews_pgdata:
+    name: ainews_pgdata
