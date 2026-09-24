@@ -1,0 +1,20 @@
+[Unit]
+Description=AI Industry News Daily - Autonomous Editorial Pipeline Run
+After=network-online.target docker.service ainews-backend.service
+Wants=network-online.target
+Requires=ainews-backend.service
+
+[Service]
+Type=oneshot
+User=dan
+Group=dan
+WorkingDirectory=/home/dan/Code/www/ainews
+Environment="PYTHONPATH=/home/dan/Code/www/ainews"
+EnvironmentFile=-/home/dan/Code/www/ainews/.env
+ExecStart=/home/dan/Code/www/ainews/backend/venv/bin/python -m agents.run_editorial_workflow --live --publish
+StandardOutput=append:/home/dan/Code/www/ainews/logs/editorial_cron.log
+StandardError=append:/home/dan/Code/www/ainews/logs/editorial_cron.log
+TimeoutStartSec=900
+
+[Install]
+WantedBy=multi-user.target

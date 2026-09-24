@@ -46,8 +46,13 @@ def get_agent_model(role: str) -> str:
     raw_model = MODEL_REGISTRY.get(role.lower(), DEFAULT_LLM_MODEL)
     return normalize_model_name(raw_model)
 
+# Host and Port Configuration
+APP_HOST = os.getenv("APP_HOST", "192.168.1.101")
+BACKEND_PORT = os.getenv("BACKEND_PORT", "8000")
+FRONTEND_PORT = os.getenv("FRONTEND_PORT", "5173")
+
 # Editorial MCP configuration
-EDITORIAL_MCP_URL = os.getenv("EDITORIAL_MCP_URL", "http://127.0.0.1:8000/api/editorial")
+EDITORIAL_MCP_URL = os.getenv("EDITORIAL_MCP_URL", f"http://{APP_HOST}:{BACKEND_PORT}/api/editorial")
 EDITORIAL_API_TOKEN = os.getenv("EDITORIAL_SECRET_KEY") or os.getenv("EDITORIAL_API_TOKEN", "secret-token-change-in-production")
 
 # Search & Retrieval Services

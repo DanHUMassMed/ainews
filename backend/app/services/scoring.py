@@ -4,6 +4,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from backend.app.models.configuration import EditorialConfiguration
 
+
+DEFAULT_THRESHOLDS = {
+    "min_selection_threshold": 4.0,
+    "core_min_score": 6.0,
+    "core_min_evidence": 7.0,
+    "exploratory_min_score": 5.0,
+    "exploratory_min_novelty": 6.5,
+    "contrarian_min_novelty": 8.0,
+    "contrarian_max_saturation": 4.0,
+    "stale_backup_min_score": 4.5,
+}
+
 DEFAULT_WEIGHTS = {
     "significance_weight": 0.35,
     "novelty_weight": 0.25,
@@ -37,6 +49,20 @@ class ScoringEngine:
         if cold_start_active:
             weights["feedback_weight"] = 0.0
         return weights
+
+    @staticmethod
+    async def get_active_thresholds(session: AsyncSession) -> Dict[str, float]:
+        res = await session.execute(
+            select(EditorialConfiguration).where(EditorialConfiguration.key == "scoring_thresholds")
+        )
+        cfg = res.scalar_one_or_none()
+        thresholds = DEFAULT_THRESHOLDS.copy()
+        if cfg and isinstance(cfg.value, dict):
+            for k in thresholds.keys():
+                if k in cfg.value:
+                    thresholds[k] = float(cfg.value[k])
+        return thresholds
+
 
     @staticmethod
     def compute_composite_score(

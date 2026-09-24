@@ -14,6 +14,7 @@ from backend.app.schemas.editorial import (
     RecentStoryContextItem,
     EntityFrequencyItem,
     ScoringWeightsConfig,
+    ScoringThresholdsConfig,
 )
 
 COMMON_ENTITIES = [
@@ -84,6 +85,8 @@ class EditorialMemoryService:
         cold_start = await FeedbackService.is_cold_start_active(session)
         weights_dict = await ScoringEngine.get_active_weights(session, cold_start_active=cold_start)
         weights_config = ScoringWeightsConfig(**weights_dict)
+        thresholds_dict = await ScoringEngine.get_active_thresholds(session)
+        thresholds_config = ScoringThresholdsConfig(**thresholds_dict)
         feedback_analytics = await FeedbackService.get_analytics(session, window_days=days_lookback)
 
         return EditorialContextResponse(
@@ -92,6 +95,7 @@ class EditorialMemoryService:
             recent_stories=recent_story_items,
             recent_covered_entities=entity_items,
             scoring_weights=weights_config,
+            scoring_thresholds=thresholds_config,
             feedback_analytics=feedback_analytics,
             repetition_avoid_topics=repetition_avoid,
             portfolio_targets={"core": 70, "exploratory": 20, "contrarian": 10},

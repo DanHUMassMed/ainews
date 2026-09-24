@@ -6,6 +6,11 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "AI Industry News Daily"
     API_V1_STR: str = "/api"
     
+    # Network & Host Binding
+    APP_HOST: str = "192.168.1.101"
+    BACKEND_PORT: int = 8000
+    FRONTEND_PORT: int = 5173
+    
     # Database
     POSTGRES_USER: str = "ainews"
     POSTGRES_PASSWORD: str = "ainews_secret"
@@ -20,6 +25,7 @@ class Settings(BaseSettings):
     # Security
     EDITORIAL_SECRET_KEY: str = "hermes_editorial_secret_token_change_in_production"
     ADMIN_API_TOKEN: str = "admin_editorial_secret_token_change_in_production"
+    EDITORIAL_ADMIN_PASSWORD: str = "P@ssw0rd"
     
     # Editorial Defaults
     DISCOVERY_LOOKBACK_HOURS: int = 28

@@ -7,6 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, desc, func
 from sqlalchemy.orm import selectinload
 
+from pydantic import BaseModel
+from backend.app.core.config import settings
 from backend.app.core.database import get_db
 from backend.app.core.security import verify_editorial_token
 from backend.app.models.edition import Edition
@@ -17,9 +19,14 @@ from backend.app.models.candidate import StoryCandidate
 from backend.app.models.feedback import Feedback
 from backend.app.models.memory import EditorialMemory
 from backend.app.models.pipeline_run import PipelineRun
+from backend.app.models.configuration import EditorialConfiguration
 from backend.app.schemas.editorial import (
     EditorialContextRequest,
     EditorialContextResponse,
+    ScoringWeightsConfig,
+    ScoringThresholdsConfig,
+    ScoringConfigResponse,
+    ScoringConfigUpdateRequest,
 )
 from backend.app.schemas.feedback import FeedbackAnalyticsResponse
 from backend.app.schemas.candidate import (
@@ -31,11 +38,28 @@ from backend.app.schemas.edition import (
     EditionResponse,
     EditionStatusResponse,
 )
-from backend.app.services.scoring import ScoringEngine
+from backend.app.services.scoring import ScoringEngine, DEFAULT_WEIGHTS, DEFAULT_THRESHOLDS
 from backend.app.services.feedback import FeedbackService
 from backend.app.services.editorial_memory import EditorialMemoryService
 
 router = APIRouter(prefix="/editorial", tags=["Hermes Editorial Skill API"])
+
+class AdminAuthRequest(BaseModel):
+    password: str
+
+@router.post("/auth", response_model=Dict[str, Any])
+async def verify_admin_auth(req: AdminAuthRequest):
+    """Verify admin password to unlock Editorial Admin & Pipeline."""
+    if req.password == settings.EDITORIAL_ADMIN_PASSWORD:
+        return {
+            "status": "authenticated",
+            "token": settings.EDITORIAL_SECRET_KEY,
+            "message": "Access granted to Editorial Admin & Pipeline.",
+        }
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Invalid password. Access denied.",
+    )
 
 def slugify(text: str) -> str:
     slug = re.sub(r'[^a-zA-Z0-9\s-]', '', text.lower())
@@ -63,6 +87,10 @@ async def submit_candidate_stories(
     db: AsyncSession = Depends(get_db),
     _token: str = Security(verify_editorial_token),
 ):
+    from sqlalchemy import delete
+    if req.clear_existing:
+        await db.execute(delete(StoryCandidate))
+
     cold_start = await FeedbackService.is_cold_start_active(db)
     weights = await ScoringEngine.get_active_weights(db, cold_start_active=cold_start)
 
@@ -113,11 +141,25 @@ async def list_candidates(
     db: AsyncSession = Depends(get_db),
     _token: str = Security(verify_editorial_token),
 ):
-    stmt = select(StoryCandidate).order_by(StoryCandidate.discovered_at.desc()).limit(limit)
+    stmt = (
+        select(StoryCandidate)
+        .order_by(StoryCandidate.selected.desc(), StoryCandidate.composite_score.desc(), StoryCandidate.discovered_at.desc())
+        .limit(limit)
+    )
     if selected_only is not None:
         stmt = stmt.where(StoryCandidate.selected == selected_only)
     res = await db.execute(stmt)
     return res.scalars().all()
+
+@router.delete("/candidates", response_model=Dict[str, Any])
+async def clear_candidates(
+    db: AsyncSession = Depends(get_db),
+    _token: str = Security(verify_editorial_token),
+):
+    from sqlalchemy import delete
+    await db.execute(delete(StoryCandidate))
+    await db.commit()
+    return {"status": "cleared", "message": "Candidate audit records cleared successfully."}
 
 @router.post("/draft", response_model=EditionResponse)
 async def stage_edition_draft(
@@ -456,3 +498,105 @@ async def record_editorial_override(
         "payload": payload,
         "recorded_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+@router.get("/config/scoring", response_model=ScoringConfigResponse)
+async def get_scoring_config(
+    db: AsyncSession = Depends(get_db),
+    _token: str = Security(verify_editorial_token),
+):
+    """Retrieve active editorial scoring weights and quality thresholds."""
+    w_res = await db.execute(select(EditorialConfiguration).where(EditorialConfiguration.key == "scoring_weights"))
+    w_cfg = w_res.scalar_one_or_none()
+    weights_dict = DEFAULT_WEIGHTS.copy()
+    if w_cfg and isinstance(w_cfg.value, dict):
+        weights_dict.update({k: float(v) for k, v in w_cfg.value.items() if k in weights_dict})
+
+    t_res = await db.execute(select(EditorialConfiguration).where(EditorialConfiguration.key == "scoring_thresholds"))
+    t_cfg = t_res.scalar_one_or_none()
+    thresholds_dict = DEFAULT_THRESHOLDS.copy()
+    if t_cfg and isinstance(t_cfg.value, dict):
+        thresholds_dict.update({k: float(v) for k, v in t_cfg.value.items() if k in thresholds_dict})
+
+    updated_at = None
+    if w_cfg and w_cfg.updated_at:
+        updated_at = w_cfg.updated_at.isoformat()
+
+    return ScoringConfigResponse(
+        weights=ScoringWeightsConfig(**weights_dict),
+        thresholds=ScoringThresholdsConfig(**thresholds_dict),
+        description=w_cfg.description if w_cfg else "Active multi-factor scoring configuration",
+        updated_at=updated_at,
+    )
+
+@router.put("/config/scoring", response_model=ScoringConfigResponse)
+async def update_scoring_config(
+    req: ScoringConfigUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    _token: str = Security(verify_editorial_token),
+):
+    """Update active editorial scoring weights and thresholds in database."""
+    now = datetime.now(timezone.utc)
+    if req.weights:
+        w_res = await db.execute(select(EditorialConfiguration).where(EditorialConfiguration.key == "scoring_weights"))
+        w_cfg = w_res.scalar_one_or_none()
+        w_dict = req.weights.model_dump()
+        if not w_cfg:
+            w_cfg = EditorialConfiguration(
+                key="scoring_weights",
+                value=w_dict,
+                description="Custom weights for candidate composite scoring calculation",
+                updated_at=now,
+            )
+            db.add(w_cfg)
+        else:
+            w_cfg.value = w_dict
+            w_cfg.updated_at = now
+
+    if req.thresholds:
+        t_res = await db.execute(select(EditorialConfiguration).where(EditorialConfiguration.key == "scoring_thresholds"))
+        t_cfg = t_res.scalar_one_or_none()
+        t_dict = req.thresholds.model_dump()
+        if not t_cfg:
+            t_cfg = EditorialConfiguration(
+                key="scoring_thresholds",
+                value=t_dict,
+                description="Custom selection and tier thresholds",
+                updated_at=now,
+            )
+            db.add(t_cfg)
+        else:
+            t_cfg.value = t_dict
+            t_cfg.updated_at = now
+
+    await db.commit()
+    return await get_scoring_config(db=db, _token=_token)
+
+@router.post("/config/scoring/reset", response_model=ScoringConfigResponse)
+async def reset_scoring_config(
+    db: AsyncSession = Depends(get_db),
+    _token: str = Security(verify_editorial_token),
+):
+    """Reset editorial scoring weights and thresholds to default canonical values."""
+    now = datetime.now(timezone.utc)
+    w_res = await db.execute(select(EditorialConfiguration).where(EditorialConfiguration.key == "scoring_weights"))
+    w_cfg = w_res.scalar_one_or_none()
+    if w_cfg:
+        w_cfg.value = DEFAULT_WEIGHTS.copy()
+        w_cfg.updated_at = now
+
+    t_res = await db.execute(select(EditorialConfiguration).where(EditorialConfiguration.key == "scoring_thresholds"))
+    t_cfg = t_res.scalar_one_or_none()
+    if t_cfg:
+        t_cfg.value = DEFAULT_THRESHOLDS.copy()
+        t_cfg.updated_at = now
+    else:
+        db.add(EditorialConfiguration(
+            key="scoring_thresholds",
+            value=DEFAULT_THRESHOLDS.copy(),
+            description="Default canonical selection and tier thresholds",
+            updated_at=now,
+        ))
+
+    await db.commit()
+    return await get_scoring_config(db=db, _token=_token)

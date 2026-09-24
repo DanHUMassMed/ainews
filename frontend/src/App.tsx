@@ -2,6 +2,7 @@ import React, { useEffect, useState, useMemo } from 'react';
 import {
   fetchTodayEdition,
   fetchEditionByDate,
+  fetchEditionsList,
   type EditionDetail,
 } from './api';
 import { Header } from './components/Header';
@@ -17,6 +18,7 @@ import {
   X,
   Radio,
   Cpu,
+  Info,
 } from 'lucide-react';
 
 export const App: React.FC = () => {
@@ -36,6 +38,7 @@ export const App: React.FC = () => {
   const [edition, setEdition] = useState<EditionDetail | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const [fallbackNotice, setFallbackNotice] = useState<string | null>(null);
 
   // Apply theme to html root
   useEffect(() => {
@@ -43,20 +46,64 @@ export const App: React.FC = () => {
     localStorage.setItem('ainews_theme', isDark ? 'dark' : 'light');
   }, [isDark]);
 
-  // Fetch edition data when viewing 'today' (or specific date)
+  // Fetch edition data when viewing 'today' (or specific date) with graceful fallback
   const loadEdition = async (dateStr?: string | null) => {
     setLoading(true);
     setError(null);
+    setFallbackNotice(null);
     try {
       let data: EditionDetail;
       if (dateStr) {
         data = await fetchEditionByDate(dateStr);
       } else {
-        data = await fetchTodayEdition();
+        try {
+          data = await fetchTodayEdition();
+        } catch (todayErr: any) {
+          console.warn("Today's briefing not available or server error, falling back to archive:", todayErr);
+          // Graceful fallback to latest published edition from archive
+          try {
+            const archive = await fetchEditionsList();
+            if (archive && archive.length > 0) {
+              data = await fetchEditionByDate(archive[0].date);
+              setFallbackNotice(
+                `Today's edition is currently being finalized. Showing latest published briefing from ${archive[0].date}.`
+              );
+            } else {
+              throw todayErr;
+            }
+          } catch (archiveErr) {
+            // Check localStorage cache as secondary fallback
+            const cached = localStorage.getItem("ainews_cached_edition");
+            if (cached) {
+              data = JSON.parse(cached);
+              setFallbackNotice(
+                `Server temporarily unreachable. Showing cached briefing from ${data.date}.`
+              );
+            } else {
+              throw todayErr;
+            }
+          }
+        }
       }
       setEdition(data);
+      if (!dateStr && !fallbackNotice) {
+        try {
+          localStorage.setItem("ainews_cached_edition", JSON.stringify(data));
+        } catch (_) {}
+      }
     } catch (err: any) {
       console.error('Error fetching edition:', err);
+      // As a last resort, check offline cache
+      const cached = localStorage.getItem("ainews_cached_edition");
+      if (cached) {
+        try {
+          const parsed = JSON.parse(cached);
+          setEdition(parsed);
+          setFallbackNotice(`Offline mode: Showing cached briefing from ${parsed.date}.`);
+          setError(null);
+          return;
+        } catch (_) {}
+      }
       setError(err?.message || 'Failed to load edition');
     } finally {
       setLoading(false);
@@ -245,6 +292,43 @@ export const App: React.FC = () => {
               </div>
             ) : edition ? (
               <>
+                {/* Fallback Edition Notice (PRD Resiliency Rule) */}
+                {fallbackNotice && (
+                  <div
+                    style={{
+                      background: 'rgba(59, 130, 246, 0.08)',
+                      border: '1px solid rgba(59, 130, 246, 0.3)',
+                      padding: '12px 18px',
+                      borderRadius: '8px',
+                      marginBottom: '20px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '12px',
+                      color: 'var(--text-main)',
+                      fontSize: '0.88rem',
+                    }}
+                  >
+                    <Info size={18} color="#3b82f6" style={{ flexShrink: 0 }} />
+                    <span style={{ flex: 1 }}>{fallbackNotice}</span>
+                    <button
+                      onClick={() => loadEdition(null)}
+                      style={{
+                        background: 'transparent',
+                        border: 'none',
+                        color: 'var(--primary)',
+                        cursor: 'pointer',
+                        fontWeight: 600,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        fontSize: '0.82rem',
+                      }}
+                    >
+                      <RefreshCw size={13} /> Check Today
+                    </button>
+                  </div>
+                )}
+
                 {/* Low Signal Day Banner (PRD2 Rule) */}
                 {edition.low_signal_notice && (
                   <div

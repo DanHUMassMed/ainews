@@ -1,0 +1,21 @@
+[Unit]
+Description=AI Industry News Daily - FastAPI Backend API Server
+After=network-online.target docker.service
+Wants=network-online.target docker.service
+
+[Service]
+Type=simple
+User=dan
+Group=dan
+WorkingDirectory=/home/dan/Code/www/ainews
+Environment="PYTHONPATH=/home/dan/Code/www/ainews"
+EnvironmentFile=-/home/dan/Code/www/ainews/.env
+ExecStart=/home/dan/Code/www/ainews/backend/venv/bin/uvicorn backend.app.main:app --host 192.168.1.101 --port 8000
+Restart=always
+RestartSec=5s
+KillMode=process
+StandardOutput=append:/home/dan/Code/www/ainews/logs/backend.log
+StandardError=append:/home/dan/Code/www/ainews/logs/backend.log
+
+[Install]
+WantedBy=multi-user.target

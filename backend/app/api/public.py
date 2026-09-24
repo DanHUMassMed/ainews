@@ -130,7 +130,7 @@ async def get_edition_by_date(edition_date: date, db: AsyncSession = Depends(get
 async def list_editions(skip: int = 0, limit: int = 30, db: AsyncSession = Depends(get_db)):
     stmt = (
         select(Edition)
-        .where(Edition.status == "published")
+        .where(and_(Edition.status == "published", Edition.date <= date.today()))
         .order_by(Edition.date.desc())
         .offset(skip)
         .limit(limit)

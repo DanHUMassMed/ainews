@@ -42,8 +42,19 @@ class EditorialMCPClient:
     async def fetch_editorial_memory(self, memory_type: Optional[str] = None) -> List[Dict[str, Any]]:
         return await self._call("fetch_editorial_memory", {"memory_type": memory_type})
 
-    async def submit_candidate_stories(self, candidates: List[Dict[str, Any]], run_id: Optional[str] = None) -> Dict[str, Any]:
-        return await self._call("submit_candidate_stories", {"candidates": candidates, "run_id": run_id})
+    async def submit_candidate_stories(
+        self,
+        candidates: List[Dict[str, Any]],
+        run_id: Optional[str] = None,
+        clear_existing: bool = True,
+        edition_date: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return await self._call("submit_candidate_stories", {
+            "candidates": candidates,
+            "run_id": run_id,
+            "clear_existing": clear_existing,
+            "edition_date": edition_date,
+        })
 
     async def get_candidate_details(self, candidate_id: str) -> Dict[str, Any]:
         return await self._call("get_candidate_details", {"candidate_id": candidate_id})

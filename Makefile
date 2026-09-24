@@ -1,3 +1,7 @@
+APP_HOST ?= $(shell grep '^APP_HOST=' .env 2>/dev/null | cut -d '=' -f2 || echo "192.168.1.101")
+BACKEND_PORT ?= $(shell grep '^BACKEND_PORT=' .env 2>/dev/null | cut -d '=' -f2 || echo "8000")
+FRONTEND_PORT ?= $(shell grep '^FRONTEND_PORT=' .env 2>/dev/null | cut -d '=' -f2 || echo "5173")
+
 .PHONY: help start stop restart status ps logs backend frontend mcp-server test-skill test-skill-live seed-demo test migrate seed verify-db clean
 
 PYTHON := ./backend/venv/bin/python
@@ -57,15 +61,15 @@ status:
 	@curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8080/ | grep -q "200" && echo "✓ Running (HTTP 200)" || echo "✗ DOWN"
 	@echo -n "Firecrawl (127.0.0.1:3002): "
 	@curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:3002/ | grep -q -E "200|404" && echo "✓ Running" || echo "✗ DOWN"
-	@echo -n "Backend API (127.0.0.1:8000): "
-	@curl -s http://127.0.0.1:8000/api/health 2>/dev/null | grep -q "healthy" && echo "✓ Running (Healthy)" || echo "✗ Not running on :8000 (run 'make backend')"
-	@echo -n "Frontend UI (127.0.0.1:5173): "
-	@curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:5173/ 2>/dev/null | grep -q "200" && echo "✓ Running (HTTP 200)" || echo "✗ Not running on :5173 (run 'make frontend')"
+	@echo -n "Backend API ($(APP_HOST):$(BACKEND_PORT)): "
+	@curl -s http://$(APP_HOST):$(BACKEND_PORT)/api/health 2>/dev/null | grep -q "healthy" && echo "✓ Running (Healthy)" || echo "✗ Not running on :8000 (run 'make backend')"
+	@echo -n "Frontend UI ($(APP_HOST):$(FRONTEND_PORT)): "
+	@curl -s -o /dev/null -w "%{http_code}" http://$(APP_HOST):$(FRONTEND_PORT)/ 2>/dev/null | grep -q "200" && echo "✓ Running (HTTP 200)" || echo "✗ Not running on :5173 (run 'make frontend')"
 	@echo "  make mcp-server      - Run the Editorial MCP Server over stdio"
 	@echo "=========================================="
 
 backend:
-	PYTHONPATH=. $(UVICORN) backend.app.main:app --host 0.0.0.0 --port 8000 --reload
+	PYTHONPATH=. $(UVICORN) backend.app.main:app --host $(APP_HOST) --port $(BACKEND_PORT) --reload
 
 migrate:
 	$(ALEMBIC) upgrade head
@@ -88,7 +92,7 @@ clean:
 	rm -rf .coverage
 
 frontend:
-	cd frontend && npm run dev -- --host 0.0.0.0 --port 5173
+	cd frontend && npm run dev -- --host $(APP_HOST) --port $(FRONTEND_PORT)
 
 run-agents:
 	PYTHONPATH=. $(PYTHON) agents/run_editorial_workflow.py

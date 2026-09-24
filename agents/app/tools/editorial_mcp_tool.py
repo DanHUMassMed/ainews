@@ -24,14 +24,24 @@ async def fetch_editorial_memory(memory_type: Optional[str] = None) -> List[Dict
     """Retrieve editorial guidelines, voice constraints, blacklist domains, and precedent rules."""
     return await _client.fetch_editorial_memory(memory_type=memory_type)
 
-async def submit_candidate_stories(candidates: List[Dict[str, Any]], run_id: Optional[str] = None) -> Dict[str, Any]:
+async def submit_candidate_stories(
+    candidates: List[Dict[str, Any]],
+    run_id: Optional[str] = None,
+    clear_existing: bool = True,
+    edition_date: Optional[str] = None,
+) -> Dict[str, Any]:
     """Submit evaluated candidate stories for editorial pipeline ingestion.
 
     Each candidate should have:
         title (str), url (str), summary (str), why_it_matters (str),
         score (float), tier (str), primary_category (str).
     """
-    return await _client.submit_candidate_stories(candidates=candidates, run_id=run_id)
+    return await _client.submit_candidate_stories(
+        candidates=candidates,
+        run_id=run_id,
+        clear_existing=clear_existing,
+        edition_date=edition_date,
+    )
 
 async def get_candidate_details(candidate_id: str) -> Dict[str, Any]:
     """Retrieve full evaluation details, scores, and source content for a candidate story."""

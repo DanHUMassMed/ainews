@@ -66,6 +66,14 @@ export interface CandidateItem {
   selected: boolean;
   rejected_reason?: string;
   discovered_at: string;
+  created_at?: string;
+  metadata_json?: {
+    edition_date?: string;
+    published_at?: string;
+    occurrence_date?: string;
+    recovered_from_backup?: boolean;
+    [key: string]: any;
+  };
 }
 
 export interface FeedbackAnalytics {
@@ -86,7 +94,42 @@ export interface FeedbackAnalytics {
   top_negative_topics: string[];
 }
 
-const HERMES_TOKEN = "hermes_editorial_secret_token_change_in_production";
+const DEFAULT_HERMES_TOKEN = "hermes_editorial_secret_token_change_in_production";
+
+export function getEditorialToken(): string {
+  return sessionStorage.getItem("ainews_editorial_token") || DEFAULT_HERMES_TOKEN;
+}
+
+export function isEditorialAdminAuthenticated(): boolean {
+  return sessionStorage.getItem("ainews_admin_auth") === "true";
+}
+
+export function logoutEditorialAdmin(): void {
+  sessionStorage.removeItem("ainews_admin_auth");
+  sessionStorage.removeItem("ainews_editorial_token");
+}
+
+export async function loginEditorialAdmin(password: string): Promise<{ success: boolean; error?: string }> {
+  try {
+    const res = await fetch("/api/editorial/auth", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password }),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      sessionStorage.setItem("ainews_admin_auth", "true");
+      if (data.token) {
+        sessionStorage.setItem("ainews_editorial_token", data.token);
+      }
+      return { success: true };
+    }
+    const errData = await res.json().catch(() => ({}));
+    return { success: false, error: errData.detail || "Invalid password. Access denied." };
+  } catch (err: any) {
+    return { success: false, error: err.message || "Failed to authenticate" };
+  }
+}
 
 function getSessionId(): string {
   let sid = localStorage.getItem("ainews_reader_session");
@@ -153,9 +196,9 @@ export async function sendFeedback(storyId: string, vote: number): Promise<{ upv
   return res.json();
 }
 
-export async function fetchEditorialCandidates(limit: number = 30): Promise<CandidateItem[]> {
+export async function fetchEditorialCandidates(limit: number = 100): Promise<CandidateItem[]> {
   const res = await fetch(`/api/editorial/candidates?limit=${limit}`, {
-    headers: { Authorization: `Bearer ${HERMES_TOKEN}` },
+    headers: { Authorization: `Bearer ${getEditorialToken()}` },
   });
   if (!res.ok) {
     throw new Error("Failed to fetch candidate audit trail");
@@ -163,9 +206,20 @@ export async function fetchEditorialCandidates(limit: number = 30): Promise<Cand
   return res.json();
 }
 
+export async function clearEditorialCandidates(): Promise<{ status: string; message: string }> {
+  const res = await fetch(`/api/editorial/candidates`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${getEditorialToken()}` },
+  });
+  if (!res.ok) {
+    throw new Error("Failed to clear candidate audit trail");
+  }
+  return res.json();
+}
+
 export async function fetchFeedbackAnalytics(): Promise<FeedbackAnalytics> {
   const res = await fetch("/api/editorial/feedback-analytics", {
-    headers: { Authorization: `Bearer ${HERMES_TOKEN}` },
+    headers: { Authorization: `Bearer ${getEditorialToken()}` },
   });
   if (!res.ok) {
     throw new Error("Failed to fetch feedback analytics");
@@ -175,7 +229,7 @@ export async function fetchFeedbackAnalytics(): Promise<FeedbackAnalytics> {
 
 export async function getEditionGateStatus(editionId: string): Promise<any> {
   const res = await fetch(`/api/editorial/edition/${editionId}/status`, {
-    headers: { Authorization: `Bearer ${HERMES_TOKEN}` },
+    headers: { Authorization: `Bearer ${getEditorialToken()}` },
   });
   if (!res.ok) {
     throw new Error("Failed to fetch edition gate status");
@@ -186,10 +240,78 @@ export async function getEditionGateStatus(editionId: string): Promise<any> {
 export async function publishEdition(editionId: string): Promise<any> {
   const res = await fetch(`/api/editorial/edition/${editionId}/publish`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${HERMES_TOKEN}` },
+    headers: { Authorization: `Bearer ${getEditorialToken()}` },
   });
   if (!res.ok) {
     throw new Error("Failed to publish edition");
+  }
+  return res.json();
+}
+
+export interface ScoringWeightsConfig {
+  significance_weight: number;
+  novelty_weight: number;
+  evidence_weight: number;
+  saturation_weight: number;
+  feedback_weight: number;
+}
+
+export interface ScoringThresholdsConfig {
+  min_selection_threshold: number;
+  core_min_score: number;
+  core_min_evidence: number;
+  exploratory_min_score: number;
+  exploratory_min_novelty: number;
+  contrarian_min_novelty: number;
+  contrarian_max_saturation: number;
+  stale_backup_min_score: number;
+}
+
+export interface ScoringConfigResponse {
+  weights: ScoringWeightsConfig;
+  thresholds: ScoringThresholdsConfig;
+  description?: string;
+  updated_at?: string;
+}
+
+export async function fetchScoringConfig(): Promise<ScoringConfigResponse> {
+  const token = getEditorialToken();
+  const res = await fetch("/api/editorial/config/scoring", {
+    headers: { Authorization: "Bearer " + token },
+  });
+  if (!res.ok) {
+    throw new Error("Failed to fetch scoring configuration");
+  }
+  return res.json();
+}
+
+export async function updateScoringConfig(config: {
+  weights?: Partial<ScoringWeightsConfig>;
+  thresholds?: Partial<ScoringThresholdsConfig>;
+}): Promise<ScoringConfigResponse> {
+  const token = getEditorialToken();
+  const res = await fetch("/api/editorial/config/scoring", {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: "Bearer " + token,
+    },
+    body: JSON.stringify(config),
+  });
+  if (!res.ok) {
+    throw new Error("Failed to update scoring configuration");
+  }
+  return res.json();
+}
+
+export async function resetScoringConfig(): Promise<ScoringConfigResponse> {
+  const token = getEditorialToken();
+  const res = await fetch("/api/editorial/config/scoring/reset", {
+    method: "POST",
+    headers: { Authorization: "Bearer " + token },
+  });
+  if (!res.ok) {
+    throw new Error("Failed to reset scoring configuration");
   }
   return res.json();
 }

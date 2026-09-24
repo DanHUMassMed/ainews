@@ -70,7 +70,7 @@ async def test_mcp_submit_candidates_tool():
         candidates = [{"title": "Candidate 1", "url": "https://example.com/1", "score": 9.0}]
         res = await submit_candidate_stories(candidates)
         assert res["status"] == "success"
-        mock_submit.assert_awaited_once_with(candidates=candidates, run_id=None)
+        mock_submit.assert_awaited_once_with(candidates=candidates, run_id=None, clear_existing=True, edition_date=None)
 
 @pytest.mark.asyncio
 async def test_mcp_stage_edition_tool():

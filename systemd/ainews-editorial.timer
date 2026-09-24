@@ -1,0 +1,15 @@
+[Unit]
+Description=Daily Timer for AI Industry News Editorial Pipeline
+RefuseManualStart=no
+RefuseManualStop=no
+
+[Timer]
+# Trigger daily at 06:00:00 local time
+OnCalendar=*-*-* 06:00:00
+# If the system was powered down or asleep during the scheduled time, run immediately on wake
+Persistent=true
+# Exact timing without artificial jitter
+RandomizedDelaySec=0
+
+[Install]
+WantedBy=timers.target

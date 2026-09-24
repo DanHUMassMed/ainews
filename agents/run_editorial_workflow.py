@@ -5,6 +5,7 @@ PRD 2.0 Sections 26-27: Master execution script running the 6-agent pipeline.
 """
 
 import sys
+import os
 import asyncio
 import argparse
 from datetime import date
@@ -37,8 +38,11 @@ async def main():
     print(f"  Revisions Performed:    {result.revisions_performed}")
     if result.edition_id:
         print(f"  Edition ID:             {result.edition_id}")
-        print(f"  Public URL:             http://127.0.0.1:8000/api/public/editions/today")
-        print(f"  Frontend URL:           http://localhost:5173/")
+        app_host = os.getenv("APP_HOST", "192.168.1.101")
+        b_port = os.getenv("BACKEND_PORT", "8000")
+        f_port = os.getenv("FRONTEND_PORT", "5173")
+        print(f"  Public URL:             http://{app_host}:{b_port}/api/public/editions/today")
+        print(f"  Frontend URL:           http://{app_host}:{f_port}/")
     if result.errors:
         print(f"  Errors / Warnings:      {result.errors}")
     print("=" * 60)

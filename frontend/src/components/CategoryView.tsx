@@ -37,7 +37,7 @@ export const CategoryView: React.FC<CategoryViewProps> = ({
           Taxonomy & Topic Classification
         </h2>
         <p style={{ color: "var(--text-muted)" }}>
-          PRD Section 11 curated domains. Select a domain to filter coverage.
+          Curated editorial domains. Select a domain to filter coverage.
         </p>
       </div>
 

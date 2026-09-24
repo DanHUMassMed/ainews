@@ -60,10 +60,144 @@ class WorkflowResult:
     candidate_count: int = 0
     story_count: int = 0
     low_signal: bool = False
+    low_signal_notice: Optional[str] = None
     critic_passed: bool = False
     revisions_performed: int = 0
     errors: List[str] = field(default_factory=list)
     edition_payload: Optional[Dict[str, Any]] = None
+    staged_draft: Optional[Dict[str, Any]] = None
+
+
+def infer_story_categories(title: str, text: str = "", default_cat: str = "") -> List[str]:
+    """Infers relevant category slugs for candidate stories based on technical taxonomy keywords."""
+    combined = f"{title} {text}".lower()
+    categories = []
+    
+    if any(k in combined for k in [
+        "hardware", "blackwell", "gpu", "tpu", "npu", "wafer", "silicon",
+        "datacenter", "cooling", "chips", "accelerator", "cluster", "cerebras",
+        "nvidia", "amd", "intel", "semiconductor", "h100", "b200"
+    ]):
+        categories.append("hardware")
+        
+    if any(k in combined for k in [
+        "agent", "autonomous", "tool use", "mcp", "agentic", "runtime",
+        "harness", "workflow", "browser agent", "multi-agent"
+    ]):
+        categories.append("agents")
+        
+    if any(k in combined for k in [
+        "model", "weights", "llm", "parameters", "qwen", "deepseek",
+        "mistral", "llama", "claude", "gpt", "checkpoint", "vision", "open weight"
+    ]):
+        categories.append("ai-models")
+        
+    if any(k in combined for k in [
+        "paper", "arxiv", "benchmark", "reasoning", "attention",
+        "transformer", "architecture", "theorem", "sparse attention", "pre-training"
+    ]):
+        categories.append("research")
+        
+    if any(k in combined for k in [
+        "tool", "sdk", "library", "framework", "pytorch", "vllm",
+        "tensorrt", "triton", "ollama", "huggingface", "developer", "api"
+    ]):
+        categories.append("developer-tools")
+        
+    if any(k in combined for k in [
+        "robot", "humanoid", "embodied", "actuator", "vla", "manipulation", "boston dynamics", "figure"
+    ]):
+        categories.append("robotics")
+        
+    if any(k in combined for k in [
+        "regulation", "policy", "copyright", "ftc", "legal", "eu ai act",
+        "safety institute", "compliance", "antitrust", "legislation"
+    ]):
+        categories.append("regulation")
+        
+    if any(k in combined for k in [
+        "enterprise", "sovereign", "deployment", "customer", "forward deployed",
+        "business", "valuation", "funding", "billion", "round", "venture", "acquisition"
+    ]):
+        categories.append("enterprise-ai")
+
+    if any(k in combined for k in [
+        "infrastructure", "serving", "inference engine", "latency", "throughput", "cluster networking"
+    ]):
+        categories.append("infrastructure")
+
+    if not categories:
+        if default_cat and default_cat.lower() not in ("unknown", "general ai", "web"):
+            categories.append(default_cat.lower().replace(" ", "-"))
+        else:
+            categories.append("ai-models")
+            
+    return list(dict.fromkeys(categories))
+
+
+def resolve_candidate_feedback_bias(
+    candidate: Dict[str, Any],
+    feedback_analytics: Dict[str, Any],
+    min_category_votes: int = 3,
+) -> float:
+    """
+    Computes dynamic feedback bias [-3.0 to +3.0] for an incoming candidate story based on
+    reader feedback on 'like' stories in matching categories or topics.
+    """
+    if not feedback_analytics:
+        return 0.0
+
+    categories_data = feedback_analytics.get("categories", [])
+    cat_lookup = {}
+    for cat in categories_data:
+        if isinstance(cat, dict):
+            slug = str(cat.get("slug", "")).lower()
+            name = str(cat.get("category_name", "")).lower().replace(" ", "-")
+            up = int(cat.get("upvotes", 0))
+            down = int(cat.get("downvotes", 0))
+            rate = float(cat.get("approval_rate", 0.5))
+        else:
+            slug = str(getattr(cat, "slug", "")).lower()
+            name = str(getattr(cat, "category_name", "")).lower().replace(" ", "-")
+            up = int(getattr(cat, "upvotes", 0))
+            down = int(getattr(cat, "downvotes", 0))
+            rate = float(getattr(cat, "approval_rate", 0.5))
+
+        total_cat_votes = up + down
+        if total_cat_votes >= min_category_votes:
+            if slug:
+                cat_lookup[slug] = rate
+            if name:
+                cat_lookup[name] = rate
+
+    cand_cats = [c.lower() for c in candidate.get("category_slugs", [])]
+    if candidate.get("category"):
+        cand_cats.append(candidate["category"].lower().replace(" ", "-"))
+
+    matched_rates = []
+    for c in cand_cats:
+        if c in cat_lookup:
+            matched_rates.append(cat_lookup[c])
+
+    # Check top positive / negative topic overrides if no specific category vote reached threshold
+    if not matched_rates:
+        text = f"{candidate.get('title', '')} {candidate.get('summary', '')}".lower()
+        pos_topics = [str(t).lower() for t in feedback_analytics.get("top_positive_topics", [])]
+        neg_topics = [str(t).lower() for t in feedback_analytics.get("top_negative_topics", [])]
+        for p in pos_topics:
+            if p in text or any(p in c for c in cand_cats):
+                matched_rates.append(0.80)
+        for n in neg_topics:
+            if n in text or any(n in c for c in cand_cats):
+                matched_rates.append(0.20)
+
+    if not matched_rates:
+        return 0.0
+
+    avg_rate = sum(matched_rates) / len(matched_rates)
+    raw_bias = 6.0 * (avg_rate - 0.50)
+    return round(max(-3.0, min(3.0, raw_bias)), 3)
+
 
 class EditorialWorkflow:
     def __init__(self, live: bool = False, max_revisions: int = 2):
@@ -95,12 +229,28 @@ class EditorialWorkflow:
             # 4. Evaluation Phase (Scoring)
             evaluated_candidates = await self.step_evaluation(dossiers, context)
 
-            # Ingest candidates into DB via Editorial MCP
-            await submit_candidate_stories(evaluated_candidates, run_id=self.run_id)
-
-            # 5. Selection Phase (Story Mix & Low-Signal Gate)
+            # 5. Selection Phase (Story Mix, Low-Signal Gate & Backup Opportunity Recovery)
             selected_stories, low_signal_notice = await self.step_selection(evaluated_candidates)
             result.low_signal = low_signal_notice is not None
+
+            # Mark selected flags and metadata on evaluated_candidates for DB audit trail
+            selected_urls = {s["url"] for s in selected_stories}
+            for c in evaluated_candidates:
+                c["selected"] = c["url"] in selected_urls
+                if not c.get("metadata_json"):
+                    c["metadata_json"] = {}
+                c["metadata_json"]["edition_date"] = t_date
+                c["metadata_json"]["recovered_from_backup"] = c.get("recovered_from_backup", False)
+                c["metadata_json"]["published_at"] = c.get("published_at")
+                c["metadata_json"]["occurrence_date"] = c.get("occurrence_date")
+
+            # Ingest candidates into DB via Editorial MCP (clearing prior run clutter)
+            await submit_candidate_stories(
+                evaluated_candidates,
+                run_id=self.run_id,
+                clear_existing=True,
+                edition_date=t_date,
+            )
 
             # 6. Writing Phase (Synthesize Briefings)
             written_stories = await self.step_writing(selected_stories)
@@ -135,6 +285,9 @@ class EditorialWorkflow:
             else:
                 result.status = "staged_draft"
 
+            result.low_signal = (low_signal_notice is not None)
+            result.low_signal_notice = low_signal_notice
+            result.staged_draft = staged
             result.edition_payload = staged
             return result
 
@@ -256,13 +409,23 @@ class EditorialWorkflow:
                 except Exception:
                     pass
 
+            is_stale_rejection = False
             if not rejected_reason and pub_date and pub_date < earliest_allowed:
                 rejected_reason = f"Rejected: Story is stale (published {pub_date} is older than 48-hour lookback window relative to {ref_date})"
+                is_stale_rejection = True
 
             # 3. Paywall / Secondary Discovery Handling
             is_secondary_scoop = wl_entry and wl_entry.ingestion_strategy == "secondary_discovery_only"
 
+            inferred_cats = infer_story_categories(
+                title=lead.get("title", ""),
+                text=lead.get("summary") or lead.get("snippet", ""),
+                default_cat=wl_entry.category if wl_entry else "",
+            )
+
             dossier = {
+                "is_stale_rejection": is_stale_rejection,
+                "occurrence_date": str(pub_date) if pub_date else None,
                 "title": lead.get("title", ""),
                 "url": url,
                 "raw_url": lead.get("raw_url", url),
@@ -272,7 +435,7 @@ class EditorialWorkflow:
                 "why_it_matters": lead.get("why_it_matters", ""),
                 "publisher": lead.get("publisher", wl_entry.domain if wl_entry else "Web"),
                 "tier": lead.get("tier", wl_entry.tier if wl_entry else "Tier 3"),
-                "category_slugs": lead.get("category_slugs", ["ai-models"]),
+                "category_slugs": inferred_cats,
                 "is_lead": lead.get("is_lead", False),
                 "published_at": pub_at_str or datetime.now(timezone.utc).isoformat(),
                 "significance": lead.get("significance"),
@@ -294,6 +457,15 @@ class EditorialWorkflow:
         w_nov = weights.get("novelty_weight", 0.25)
         w_evi = weights.get("evidence_weight", 0.20)
         w_sat = weights.get("saturation_weight", 0.20)
+        fb_analytics = context.get("feedback_analytics", {})
+
+        thresholds = context.get("scoring_thresholds", {})
+        min_select = thresholds.get("min_selection_threshold", 4.0)
+        core_min_score = thresholds.get("core_min_score", 6.0)
+        core_min_evi = thresholds.get("core_min_evidence", 7.0)
+        exp_min_score = thresholds.get("exploratory_min_score", 5.0)
+        exp_min_nov = thresholds.get("exploratory_min_novelty", 6.5)
+        stale_backup_min = thresholds.get("stale_backup_min_score", 4.5)
 
         for idx, d in enumerate(dossiers):
             # Whitelist boost for Tier 1 primary lab announcements
@@ -304,13 +476,16 @@ class EditorialWorkflow:
             evi = float(d.get("evidence") if d.get("evidence") is not None else (8.0 if d.get("tier") in ("Tier 1", "Tier 2") else 7.0))
             sat = float(d.get("saturation") if d.get("saturation") is not None else 3.0)
 
-            composite = ScoringEngine.compute_composite_score(sig, nov, evi, sat, feedback_bias=0.0)
+            fb_bias = resolve_candidate_feedback_bias(d, fb_analytics)
+            composite = ScoringEngine.compute_composite_score(sig, nov, evi, sat, feedback_bias=fb_bias, weights=weights)
             
-            if d.get("rejected_reason") or composite < 4.0:
+            if d.get("is_stale_rejection") and composite >= stale_backup_min:
+                tier = "Stale Backup"
+            elif d.get("rejected_reason") or composite < min_select:
                 tier = "Rejected"
-            elif composite >= 6.0 and evi >= 7.0:
+            elif composite >= core_min_score and evi >= core_min_evi:
                 tier = "Core"
-            elif nov >= 7.0 and composite >= 5.0:
+            elif nov >= exp_min_nov and composite >= exp_min_score:
                 tier = "Exploratory"
             else:
                 tier = "Contrarian"
@@ -322,7 +497,7 @@ class EditorialWorkflow:
                     "novelty": nov,
                     "evidence": evi,
                     "saturation": sat,
-                    "feedback_bias": 0.0,
+                    "feedback_bias": fb_bias,
                     "composite": composite,
                 },
                 "tier": tier,
@@ -331,14 +506,14 @@ class EditorialWorkflow:
         return evaluated
 
     async def step_selection(self, evaluated_candidates: List[Dict[str, Any]]) -> tuple[List[Dict[str, Any]], Optional[str]]:
-        """Select 3-7 stories balancing Core, Exploratory, and Contrarian tiers."""
-        valid_pool = [c for c in evaluated_candidates if c.get("tier") != "Rejected"]
+        """Select 3-7 stories balancing Core, Exploratory, and Contrarian tiers.
+        If fewer than 5 fresh stories qualify, pulls high-value opportunities from the stale backup pool.
+        """
+        valid_pool = [c for c in evaluated_candidates if c.get("tier") in ("Core", "Exploratory", "Contrarian")]
         valid_pool.sort(key=lambda x: x["score"], reverse=True)
 
-        # Low-signal day check
-        if len(valid_pool) < 3:
-            notice = "Low-signal day in the AI ecosystem: Fewer than 3 high-substance verified stories met the publication threshold."
-            return valid_pool, notice
+        stale_backup_pool = [c for c in evaluated_candidates if c.get("tier") == "Stale Backup"]
+        stale_backup_pool.sort(key=lambda x: x["score"], reverse=True)
 
         core_stories = [c for c in valid_pool if c["tier"] == "Core"]
         exploratory_stories = [c for c in valid_pool if c["tier"] == "Exploratory"]
@@ -353,15 +528,41 @@ class EditorialWorkflow:
             selected.append(contrarian_stories[0])
 
         for c in valid_pool:
-            if len(selected) >= 6:
+            if len(selected) >= 7:
                 break
             if c not in selected:
                 selected.append(c)
 
-        if selected:
-            selected[0]["is_lead"] = True
+        # Requirement 2: Stale (>48h) High-Value Opportunity Backup Recovery
+        # If fewer than 5 fresh stories met the threshold, pull high-value opportunities from stale backup
+        if len(selected) < 5 and stale_backup_pool:
+            logger.info(
+                f"Fresh story count ({len(selected)}) is below standard (5). "
+                f"Recovering up to {5 - len(selected)} high-value opportunities from {len(stale_backup_pool)} backup items..."
+            )
+            for s_cand in stale_backup_pool:
+                if len(selected) >= 5:
+                    break
+                if s_cand not in selected:
+                    s_cand["tier"] = "Recovered Archive"
+                    s_cand["recovered_from_backup"] = True
+                    s_cand["selected"] = True
+                    s_cand["rejected_reason"] = None
+                    selected.append(s_cand)
 
-        return selected, None
+        # Ensure exactly one lead story is selected (the highest ranked)
+        for idx, s in enumerate(selected):
+            s["is_lead"] = (idx == 0)
+            s["selected"] = True
+
+        notice = None
+        if len(selected) < 5:
+            notice = (
+                f"Low-signal day in the AI ecosystem: {len(selected)} high-substance verified stories "
+                f"met the publication threshold (standard is 5-7)."
+            )
+
+        return selected, notice
 
     async def _synthesize_candidate(self, c: Dict[str, Any], idx: int) -> Dict[str, Any]:
         """Synthesizes a publication-grade story using LiteLLM/OpenRouter with structured fallback."""
@@ -375,14 +576,15 @@ class EditorialWorkflow:
         why_it_matters = None
         body = None
 
-        # 1. Attempt LLM Synthesis via OpenRouter
-        try:
-            from litellm import acompletion
-            from agents.app.config import get_agent_model, OPENROUTER_API_KEY
-            model = get_agent_model("writing")
-            api_key = OPENROUTER_API_KEY or os.getenv("OPENROUTER_API_KEY")
-            
-            prompt = f"""You are the senior technical editor for AI Industry News Daily.
+        # 1. Attempt LLM Synthesis via OpenRouter (only in live mode)
+        if self.live:
+            try:
+                from litellm import acompletion
+                from agents.app.config import get_agent_model, OPENROUTER_API_KEY
+                model = get_agent_model("writing")
+                api_key = OPENROUTER_API_KEY or os.getenv("OPENROUTER_API_KEY")
+                
+                prompt = f"""You are the senior technical editor for AI Industry News Daily.
 Synthesize an authoritative, high-density briefing item for:
 Title: {c_title}
 Publisher: {pub_name}
@@ -397,46 +599,75 @@ Requirements:
 
 Return ONLY a valid JSON object with keys: "headline", "summary", "why_it_matters", "body"."""
 
-            resp = await asyncio.wait_for(
-                acompletion(
-                    model=model,
-                    messages=[{"role": "user", "content": prompt}],
-                    max_tokens=3500,
-                    api_key=api_key
-                ),
-                timeout=45.0
-            )
-            raw = (resp.choices[0].message.content or "").strip()
-            if "```json" in raw:
-                raw = raw.split("```json")[1].split("```")[0].strip()
-            elif "```" in raw:
-                raw = raw.split("```")[1].split("```")[0].strip()
-            data = json.loads(raw)
-            if data.get("headline") and len(data["headline"].strip()) >= 15:
-                headline = data["headline"].strip()
-            if data.get("summary") and len(data["summary"].strip()) >= 150:
-                summary = data["summary"].strip()
-            if data.get("why_it_matters") and len(data["why_it_matters"].strip()) >= 60:
-                why_it_matters = data["why_it_matters"].strip()
-            if data.get("body") and len(data["body"].strip()) >= 400:
-                body = data["body"].strip()
-        except Exception as e:
-            logger.warning(f"LLM synthesis for {c_title} failed or timed out: {e}")
+                resp = await asyncio.wait_for(
+                    acompletion(
+                        model=model,
+                        messages=[{"role": "user", "content": prompt}],
+                        max_tokens=2600,
+                        api_key=api_key
+                    ),
+                    timeout=90.0
+                )
+                raw = (resp.choices[0].message.content or "").strip()
+                data = {}
+                clean = raw
+                if "```json" in clean:
+                    clean = clean.split("```json")[1].split("```")[0].strip()
+                elif "```" in clean:
+                    clean = clean.split("```")[1].split("```")[0].strip()
+                try:
+                    data = json.loads(clean)
+                except Exception:
+                    # Robust regex recovery for partial or truncated JSON
+                    for key in ["headline", "summary", "why_it_matters", "body"]:
+                        m = re.search(r"\"" + key + r"\"\s*:\s*\"(.*?)(?<!\\)\"", raw, re.DOTALL)
+                        if m:
+                            try:
+                                data[key] = m.group(1).encode("utf-8").decode("unicode_escape", errors="replace")
+                            except Exception:
+                                data[key] = m.group(1)
+                        elif key == "body":
+                            m_trunc = re.search(r"\"body\"\s*:\s*\"(.*)$", raw, re.DOTALL)
+                            if m_trunc:
+                                val = m_trunc.group(1).rstrip(" \"}\n")
+                                try:
+                                    data[key] = val.encode("utf-8").decode("unicode_escape", errors="replace")
+                                except Exception:
+                                    data[key] = val
+
+                if data.get("headline") and len(data["headline"].strip()) >= 15:
+                    headline = data["headline"].strip()
+                if data.get("summary") and len(data["summary"].strip()) >= 100:
+                    summary = data["summary"].strip()
+                if data.get("why_it_matters") and len(data["why_it_matters"].strip()) >= 40:
+                    why_it_matters = data["why_it_matters"].strip()
+                if data.get("body") and len(data["body"].strip()) >= 250:
+                    body = data["body"].strip()
+            except Exception as e:
+                logger.warning(f"LLM synthesis for {c_title} failed or timed out: {type(e).__name__}: {e}")
 
         # 2. Rich Domain-Specific Fallback if LLM failed
+        cat_slug = (c.get('category_slugs') or ['ai-models'])[0].lower()
         if not headline:
             headline = c_title if len(c_title) >= 15 else f"Technical Announcement: {pub_name} Systems Update #{idx + 1}"
         if not summary:
             summary = (
                 f"{clean_context[:350]}... " if len(clean_context) >= 150 else
-                f"Engineering and research teams from {pub_name} have announced substantial advances in {c.get('category_slugs', ['ai-models'])[0]}. "
+                f"Engineering and research teams from {pub_name} have announced substantial advances in {cat_slug}. "
                 f"The release introduces optimized inference pipelines, improved memory bandwidth utilization, and verifiable benchmark improvements across standardized evaluation suites."
             )
         if not why_it_matters:
-            why_it_matters = (
-                f"This shift significantly alters inference economics and latency budgets for enterprise agent deployments, "
-                f"providing engineering teams a viable blueprint for production integration."
-            )
+            category_impacts = {
+                "ai-chips": "directly impacts compute density and memory bandwidth economics, altering infrastructure cost models for frontier training clusters.",
+                "hardware": "directly impacts compute density and memory bandwidth economics, altering infrastructure cost models for frontier training clusters.",
+                "agents": "accelerates autonomous tool-use fidelity and state management in production agent systems, reducing human-in-the-loop oversight.",
+                "enterprise": "reduces deployment friction and improves latency budgets for enterprise AI integration, establishing new operational benchmarks.",
+                "open-source": "democratizes access to high-parameter sovereign weights, giving developers an open alternative to proprietary cloud API lock-in.",
+                "research": "challenges established architectural assumptions and sets new empirical baselines for reasoning efficiency.",
+                "multimodal": "expands cross-modal reasoning capabilities and low-latency perceptual processing for real-time edge and vision systems.",
+            }
+            impact = category_impacts.get(cat_slug, "alters architectural efficiency baselines and deployment latency budgets for next-generation AI workloads.")
+            why_it_matters = f"For practitioners deploying systems in the {pub_name} ecosystem, this development {impact}" 
         if not body:
             body = f"""### Architectural & Benchmark Analysis
 
@@ -503,7 +734,14 @@ Engineering teams evaluating this announcement should monitor downstream evaluat
 
     async def step_writing(self, selected_candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Synthesize candidate stories into publication-grade briefing items."""
-        tasks = [self._synthesize_candidate(c, idx) for idx, c in enumerate(selected_candidates)]
+        # Use concurrency limit of 2 to avoid hammering OpenRouter API limits and triggering timeouts
+        sem = asyncio.Semaphore(2)
+
+        async def _synth(c, idx):
+            async with sem:
+                return await self._synthesize_candidate(c, idx)
+
+        tasks = [_synth(c, idx) for idx, c in enumerate(selected_candidates)]
         stories = await asyncio.gather(*tasks)
         return list(stories)
 

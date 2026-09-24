@@ -16,7 +16,9 @@ import httpx
 from mcp.server.mcpserver import MCPServer
 
 # Configuration
-API_BASE_URL = os.getenv("AINEWS_BACKEND_URL", "http://127.0.0.1:8000/api")
+APP_HOST = os.getenv("APP_HOST", "192.168.1.101")
+BACKEND_PORT = os.getenv("BACKEND_PORT", "8000")
+API_BASE_URL = os.getenv("AINEWS_BACKEND_URL", f"http://{APP_HOST}:{BACKEND_PORT}/api").rstrip("/")
 try:
     from backend.app.core.config import settings
     EDITORIAL_TOKEN = os.getenv("EDITORIAL_SECRET_KEY") or settings.EDITORIAL_SECRET_KEY
@@ -31,14 +33,62 @@ mcp_server = MCPServer(
 )
 
 
-def _get_client(timeout: float = 15.0):
-    return httpx.AsyncClient(timeout=timeout), API_BASE_URL
-
 def _get_headers() -> Dict[str, str]:
     return {
         "Authorization": f"Bearer {EDITORIAL_TOKEN}",
         "Content-Type": "application/json",
     }
+
+
+async def _request_with_retry(
+    method: str,
+    path: str,
+    *,
+    timeout: float = 20.0,
+    max_retries: int = 4,
+    **kwargs
+) -> httpx.Response:
+    """
+    Execute an HTTP request against the FastAPI backend with exponential backoff
+    to handle transient connection failures, service boots, or timeouts.
+    """
+    url = f"{API_BASE_URL}/{path.lstrip('/')}"
+    headers = _get_headers()
+    if "headers" in kwargs:
+        headers.update(kwargs.pop("headers"))
+
+    last_error: Optional[Exception] = None
+    delays = [1.0, 2.0, 4.0, 8.0]
+
+    for attempt in range(max_retries):
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                res = await client.request(method, url, headers=headers, **kwargs)
+                # If we get a transient server gateway error, treat as retryable
+                if res.status_code in (502, 503, 504) and attempt < max_retries - 1:
+                    delay = delays[min(attempt, len(delays) - 1)]
+                    logger.warning(
+                        f"Backend returned HTTP {res.status_code} for {method} {url}. Retrying in {delay}s (attempt {attempt+1}/{max_retries})..."
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                return res
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
+            last_error = exc
+            if attempt < max_retries - 1:
+                delay = delays[min(attempt, len(delays) - 1)]
+                logger.warning(
+                    f"Connection to backend {url} failed: {exc}. Retrying in {delay}s (attempt {attempt+1}/{max_retries})..."
+                )
+                await asyncio.sleep(delay)
+            else:
+                logger.error(f"Exhausted {max_retries} attempts connecting to backend at {url}: {exc}")
+                raise
+
+    if last_error:
+        raise last_error
+    raise RuntimeError(f"Request failed after {max_retries} attempts")
+
 
 @mcp_server.tool()
 async def get_editorial_context(lookback_days: int = 28, days_lookback: Optional[int] = None) -> Dict[str, Any]:
@@ -47,15 +97,15 @@ async def get_editorial_context(lookback_days: int = 28, days_lookback: Optional
     and active scoring weights from PostgreSQL memory.
     """
     eff_days = days_lookback if days_lookback is not None else lookback_days
-    client, base_url = _get_client(15.0)
-    async with client:
-        res = await client.post(
-            f"{base_url}/editorial/context",
-            headers=_get_headers(),
-            json={"lookback_days": eff_days},
-        )
-        res.raise_for_status()
-        return res.json()
+    res = await _request_with_retry(
+        "POST",
+        "/editorial/context",
+        json={"lookback_days": eff_days},
+        timeout=20.0
+    )
+    res.raise_for_status()
+    return res.json()
+
 
 @mcp_server.tool()
 async def get_feedback_analytics(window_days: int = 30) -> Dict[str, Any]:
@@ -63,30 +113,30 @@ async def get_feedback_analytics(window_days: int = 30) -> Dict[str, Any]:
     Retrieve aggregated reader feedback analytics, category approval ratings,
     and cold-start bias status.
     """
-    client, base_url = _get_client(15.0)
-    async with client:
-        res = await client.get(
-            f"{base_url}/editorial/feedback-analytics",
-            headers=_get_headers(),
-            params={"window_days": window_days},
-        )
-        res.raise_for_status()
-        return res.json()
+    res = await _request_with_retry(
+        "GET",
+        "/editorial/feedback-analytics",
+        params={"window_days": window_days},
+        timeout=20.0
+    )
+    res.raise_for_status()
+    return res.json()
+
 
 @mcp_server.tool()
 async def get_historical_feedback(limit: int = 50, days: int = 30) -> List[Dict[str, Any]]:
     """
     Retrieve story-level upvote/downvote interaction history across recent editions.
     """
-    client, base_url = _get_client(15.0)
-    async with client:
-        res = await client.get(
-            f"{base_url}/editorial/feedback-history",
-            headers=_get_headers(),
-            params={"limit": limit, "days": days},
-        )
-        res.raise_for_status()
-        return res.json()
+    res = await _request_with_retry(
+        "GET",
+        "/editorial/feedback-history",
+        params={"limit": limit, "days": days},
+        timeout=20.0
+    )
+    res.raise_for_status()
+    return res.json()
+
 
 @mcp_server.tool()
 async def fetch_editorial_memory(memory_type: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -96,18 +146,23 @@ async def fetch_editorial_memory(memory_type: Optional[str] = None) -> List[Dict
     params = {}
     if memory_type:
         params["memory_type"] = memory_type
-    client, base_url = _get_client(15.0)
-    async with client:
-        res = await client.get(
-            f"{base_url}/editorial/memory",
-            headers=_get_headers(),
-            params=params,
-        )
-        res.raise_for_status()
-        return res.json()
+    res = await _request_with_retry(
+        "GET",
+        "/editorial/memory",
+        params=params,
+        timeout=20.0
+    )
+    res.raise_for_status()
+    return res.json()
+
 
 @mcp_server.tool()
-async def submit_candidate_stories(candidates: List[Dict[str, Any]], run_id: Optional[str] = None) -> Dict[str, Any]:
+async def submit_candidate_stories(
+    candidates: List[Dict[str, Any]],
+    run_id: Optional[str] = None,
+    clear_existing: bool = True,
+    edition_date: Optional[str] = None,
+) -> Dict[str, Any]:
     """
     Record discovered candidate stories with multi-factor dimensional scores and
     explicit rejection reasons into the publication audit trail.
@@ -115,30 +170,32 @@ async def submit_candidate_stories(candidates: List[Dict[str, Any]], run_id: Opt
     payload = {
         "candidates": candidates,
         "run_id": run_id,
+        "clear_existing": clear_existing,
+        "edition_date": edition_date,
     }
-    client, base_url = _get_client(30.0)
-    async with client:
-        res = await client.post(
-            f"{base_url}/editorial/candidates",
-            headers=_get_headers(),
-            json=payload,
-        )
-        res.raise_for_status()
-        return res.json()
+    res = await _request_with_retry(
+        "POST",
+        "/editorial/candidates",
+        json=payload,
+        timeout=45.0
+    )
+    res.raise_for_status()
+    return res.json()
+
 
 @mcp_server.tool()
 async def get_candidate_details(candidate_id: str) -> Dict[str, Any]:
     """
     Retrieve full research metadata, scores, and rejection rationale for a specific candidate story.
     """
-    client, base_url = _get_client(15.0)
-    async with client:
-        res = await client.get(
-            f"{base_url}/editorial/candidates/{candidate_id}",
-            headers=_get_headers(),
-        )
-        res.raise_for_status()
-        return res.json()
+    res = await _request_with_retry(
+        "GET",
+        f"/editorial/candidates/{candidate_id}",
+        timeout=20.0
+    )
+    res.raise_for_status()
+    return res.json()
+
 
 @mcp_server.tool()
 async def stage_edition_draft(
@@ -159,17 +216,17 @@ async def stage_edition_draft(
         "low_signal_notice": low_signal_notice,
         "stories": stories or [],
     }
-    client, base_url = _get_client(30.0)
-    async with client:
-        res = await client.post(
-            f"{base_url}/editorial/draft",
-            headers=_get_headers(),
-            json=payload,
-        )
-        if res.status_code >= 400:
-            logger.error(f"Failed to stage draft ({res.status_code}): {res.text}")
-        res.raise_for_status()
-        return res.json()
+    res = await _request_with_retry(
+        "POST",
+        "/editorial/draft",
+        json=payload,
+        timeout=45.0
+    )
+    if res.status_code >= 400:
+        logger.error(f"Failed to stage draft ({res.status_code}): {res.text}")
+    res.raise_for_status()
+    return res.json()
+
 
 @mcp_server.tool()
 async def get_edition_status(edition_id: str) -> Dict[str, Any]:
@@ -177,44 +234,44 @@ async def get_edition_status(edition_id: str) -> Dict[str, Any]:
     Check draft compliance with deterministic publication gate rules (PRD Section 27 & 36).
     Returns gate compliance status, story count, lead count, and any validation errors.
     """
-    client, base_url = _get_client(15.0)
-    async with client:
-        res = await client.get(
-            f"{base_url}/editorial/edition/{edition_id}/status",
-            headers=_get_headers(),
-        )
-        res.raise_for_status()
-        return res.json()
+    res = await _request_with_retry(
+        "GET",
+        f"/editorial/edition/{edition_id}/status",
+        timeout=20.0
+    )
+    res.raise_for_status()
+    return res.json()
+
 
 @mcp_server.tool()
 async def publish_edition(edition_id: str) -> Dict[str, Any]:
     """
     Publish an approved edition to intranet readers after deterministic gate verification.
     """
-    client, base_url = _get_client(15.0)
-    async with client:
-        res = await client.post(
-            f"{base_url}/editorial/edition/{edition_id}/publish",
-            headers=_get_headers(),
-        )
-        if res.status_code >= 400:
-            logger.error(f"Failed to publish edition ({res.status_code}): {res.text}")
-        res.raise_for_status()
-        return res.json()
+    res = await _request_with_retry(
+        "POST",
+        f"/editorial/edition/{edition_id}/publish",
+        timeout=20.0
+    )
+    if res.status_code >= 400:
+        logger.error(f"Failed to publish edition ({res.status_code}): {res.text}")
+    res.raise_for_status()
+    return res.json()
+
 
 @mcp_server.tool()
 async def unpublish_edition(edition_id: str) -> Dict[str, Any]:
     """
     Revert a published edition back to draft state for editorial modifications.
     """
-    client, base_url = _get_client(15.0)
-    async with client:
-        res = await client.post(
-            f"{base_url}/editorial/edition/{edition_id}/unpublish",
-            headers=_get_headers(),
-        )
-        res.raise_for_status()
-        return res.json()
+    res = await _request_with_retry(
+        "POST",
+        f"/editorial/edition/{edition_id}/unpublish",
+        timeout=20.0
+    )
+    res.raise_for_status()
+    return res.json()
+
 
 @mcp_server.tool()
 async def record_editorial_override(
@@ -237,19 +294,20 @@ async def record_editorial_override(
         "previous_value": previous_value,
         "new_value": new_value,
     }
-    client, base_url = _get_client(15.0)
-    async with client:
-        res = await client.post(
-            f"{base_url}/editorial/override",
-            headers=_get_headers(),
-            json=payload,
-        )
-        res.raise_for_status()
-        return res.json()
+    res = await _request_with_retry(
+        "POST",
+        "/editorial/override",
+        json=payload,
+        timeout=20.0
+    )
+    res.raise_for_status()
+    return res.json()
+
 
 def main():
     """Run MCP server over standard stdio."""
     mcp_server.run()
+
 
 if __name__ == "__main__":
     main()

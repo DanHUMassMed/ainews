@@ -26,6 +26,7 @@ class CandidateSubmitItem(BaseModel):
 class CandidateBatchSubmitRequest(BaseModel):
     edition_date: Optional[str] = None
     run_id: Optional[str] = None
+    clear_existing: bool = True
     candidates: List[CandidateSubmitItem]
 
 class CandidateResponse(BaseModel):
@@ -43,6 +44,7 @@ class CandidateResponse(BaseModel):
     selected: bool
     rejected_reason: Optional[str] = None
     cluster_id: Optional[str] = None
+    metadata_json: Optional[Dict[str, Any]] = None
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)

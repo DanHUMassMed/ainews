@@ -96,3 +96,18 @@ async def test_stage_draft_and_status(async_client):
     status_data = status_resp.json()
     assert status_data["is_valid"] is False
     assert any("at least 5 stories" in err for err in status_data["validation_errors"])
+
+@pytest.mark.asyncio
+async def test_editorial_admin_password_auth(async_client):
+    """Verify password protection for Editorial Admin & Pipeline."""
+    # 1. Invalid password rejection
+    bad_res = await async_client.post("/api/editorial/auth", json={"password": "IncorrectPassword"})
+    assert bad_res.status_code == 401
+    assert "Invalid password" in bad_res.json()["detail"]
+
+    # 2. Valid password acceptance
+    good_res = await async_client.post("/api/editorial/auth", json={"password": settings.EDITORIAL_ADMIN_PASSWORD})
+    assert good_res.status_code == 200
+    data = good_res.json()
+    assert data["status"] == "authenticated"
+    assert data["token"] == settings.EDITORIAL_SECRET_KEY
