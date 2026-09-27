@@ -48,7 +48,7 @@ async def test_stage_draft_and_status(async_client):
                 "body": "Detailed technical analysis of the sparse kernel dispatch...",
                 "is_lead": True,
                 "position": 0,
-                "category_slugs": ["ai-models", "open-ai"],
+                "category_slugs": ["ai-models", "open-source"],
                 "sources": [
                     {
                         "url": "https://arxiv.org/abs/2026.12345",

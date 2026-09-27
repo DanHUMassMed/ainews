@@ -90,6 +90,18 @@ async def test_workflow_end_to_end_staging():
     assert result.status == "staged_draft"
     assert result.story_count == 5
     assert result.candidate_count == 5
+
+    # Cleanup test edition from DB
+    from backend.app.core.database import AsyncSessionLocal
+    from backend.app.models.story import Story
+    from backend.app.models.edition import Edition
+    from sqlalchemy import delete
+    import uuid as uuid_pkg
+    if result.edition_id:
+        async with AsyncSessionLocal() as session:
+            await session.execute(delete(Story).where(Story.edition_id == uuid_pkg.UUID(result.edition_id)))
+            await session.execute(delete(Edition).where(Edition.id == uuid_pkg.UUID(result.edition_id)))
+            await session.commit()
     assert result.critic_passed is True
     assert result.edition_id is not None
     assert result.staged_draft is not None
@@ -234,6 +246,10 @@ def test_infer_story_categories():
     # Agent keywords
     cats_agent = infer_story_categories("New Autonomous Agent Protocol and Runtime Harness Released")
     assert "agents" in cats_agent
+
+    # Open Source keywords
+    cats_os = infer_story_categories("Mistral releases open-weight model with Apache 2.0 license on Hugging Face")
+    assert "open-source" in cats_os
 
     # Research keywords
     cats_res = infer_story_categories("Sparse Attention Transformer Architecture Benchmark Paper on arXiv")

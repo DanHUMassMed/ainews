@@ -69,60 +69,80 @@ class WorkflowResult:
 
 
 def infer_story_categories(title: str, text: str = "", default_cat: str = "") -> List[str]:
-    """Infers relevant category slugs for candidate stories based on technical taxonomy keywords."""
+    """Infers relevant category slugs for candidate stories based on technical taxonomy keywords with word boundaries."""
     combined = f"{title} {text}".lower()
     categories = []
-    
-    if any(k in combined for k in [
-        "hardware", "blackwell", "gpu", "tpu", "npu", "wafer", "silicon",
-        "datacenter", "cooling", "chips", "accelerator", "cluster", "cerebras",
-        "nvidia", "amd", "intel", "semiconductor", "h100", "b200"
+
+    def has_any(patterns: List[str]) -> bool:
+        return any(re.search(r"\b" + re.escape(p) + r"\b", combined) for p in patterns)
+
+    if has_any([
+        "blackwell", "gpu", "tpu", "npu", "wafer", "silicon",
+        "chips", "accelerator", "cerebras", "nvidia", "amd",
+        "semiconductor", "h100", "b200", "gb200", "asic", "hbm"
     ]):
         categories.append("hardware")
-        
-    if any(k in combined for k in [
+
+    if has_any([
         "agent", "autonomous", "tool use", "mcp", "agentic", "runtime",
-        "harness", "workflow", "browser agent", "multi-agent"
+        "harness", "workflow", "browser agent", "multi-agent", "code agent"
     ]):
         categories.append("agents")
-        
-    if any(k in combined for k in [
+
+    if has_any([
         "model", "weights", "llm", "parameters", "qwen", "deepseek",
-        "mistral", "llama", "claude", "gpt", "checkpoint", "vision", "open weight"
+        "mistral", "llama", "claude", "gpt", "checkpoint", "vision", "open weight", "gemini"
     ]):
         categories.append("ai-models")
-        
-    if any(k in combined for k in [
+
+    if has_any([
+        "open source", "open-source", "open weight", "open-weight", "open weights",
+        "weights released", "apache 2.0", "mit license", "hugging face", "huggingface", "github"
+    ]):
+        categories.append("open-source")
+
+    if has_any([
         "paper", "arxiv", "benchmark", "reasoning", "attention",
-        "transformer", "architecture", "theorem", "sparse attention", "pre-training"
+        "transformer", "architecture", "theorem", "sparse attention", "pre-training", "interpretability"
     ]):
         categories.append("research")
-        
-    if any(k in combined for k in [
-        "tool", "sdk", "library", "framework", "pytorch", "vllm",
-        "tensorrt", "triton", "ollama", "huggingface", "developer", "api"
+
+    if has_any([
+        "sdk", "library", "framework", "pytorch", "vllm",
+        "tensorrt", "triton", "ollama", "huggingface", "developer", "api", "ide"
     ]):
         categories.append("developer-tools")
-        
-    if any(k in combined for k in [
+
+    if has_any([
         "robot", "humanoid", "embodied", "actuator", "vla", "manipulation", "boston dynamics", "figure"
     ]):
         categories.append("robotics")
-        
-    if any(k in combined for k in [
+
+    if has_any([
         "regulation", "policy", "copyright", "ftc", "legal", "eu ai act",
-        "safety institute", "compliance", "antitrust", "legislation"
+        "safety institute", "compliance", "antitrust", "legislation", "governance"
     ]):
         categories.append("regulation")
-        
-    if any(k in combined for k in [
-        "enterprise", "sovereign", "deployment", "customer", "forward deployed",
-        "business", "valuation", "funding", "billion", "round", "venture", "acquisition"
+
+    if has_any([
+        "science", "scientific", "biology", "protein", "alphafold", "chemistry",
+        "materials", "genomics", "clinical", "biotech"
+    ]):
+        categories.append("science-ai")
+
+    if has_any([
+        "valuation", "funding", "seed round", "series a", "series b", "series c",
+        "venture", "acquisition", "market cap", "ipo"
+    ]):
+        categories.append("ai-business")
+
+    if has_any([
+        "enterprise", "sovereign", "deployment", "customer", "forward deployed", "enterprise ai"
     ]):
         categories.append("enterprise-ai")
 
-    if any(k in combined for k in [
-        "infrastructure", "serving", "inference engine", "latency", "throughput", "cluster networking"
+    if has_any([
+        "infrastructure", "serving", "inference engine", "latency", "throughput", "cluster networking", "kv-cache"
     ]):
         categories.append("infrastructure")
 
@@ -131,7 +151,7 @@ def infer_story_categories(title: str, text: str = "", default_cat: str = "") ->
             categories.append(default_cat.lower().replace(" ", "-"))
         else:
             categories.append("ai-models")
-            
+
     return list(dict.fromkeys(categories))
 
 
@@ -596,8 +616,9 @@ Requirements:
 2. "summary": 2-3 dense paragraphs (min 180 chars, zero HTML tags). Detail what was introduced, technical specifications, training compute/framework, and performance deltas.
 3. "why_it_matters": 2-3 concise sentences (min 60 chars) on production implications, developer economics, or architectural shifts.
 4. "body": Structured technical deep-dive in Markdown (min 500 chars). Use ### headings such as ### Architectural & Benchmark Analysis, ### Compute Economics & Scaling, ### Enterprise Integration Takeaways.
+5. "category_slugs": 1 to 2 most relevant category slugs chosen strictly from: ["ai-models", "agents", "infrastructure", "hardware", "developer-tools", "research", "enterprise-ai", "regulation", "robotics", "science-ai", "ai-business", "open-source"].
 
-Return ONLY a valid JSON object with keys: "headline", "summary", "why_it_matters", "body"."""
+Return ONLY a valid JSON object with keys: "headline", "summary", "why_it_matters", "body", "category_slugs"."""
 
                 resp = await asyncio.wait_for(
                     acompletion(
@@ -643,6 +664,14 @@ Return ONLY a valid JSON object with keys: "headline", "summary", "why_it_matter
                     why_it_matters = data["why_it_matters"].strip()
                 if data.get("body") and len(data["body"].strip()) >= 250:
                     body = data["body"].strip()
+                if data.get("category_slugs") and isinstance(data["category_slugs"], list):
+                    valid_slugs = {
+                        "ai-models", "agents", "infrastructure", "hardware", "developer-tools",
+                        "research", "enterprise-ai", "regulation", "robotics", "science-ai", "ai-business", "open-source"
+                    }
+                    llm_cats = [s for s in data["category_slugs"] if s in valid_slugs]
+                    if llm_cats:
+                        c["category_slugs"] = llm_cats
             except Exception as e:
                 logger.warning(f"LLM synthesis for {c_title} failed or timed out: {type(e).__name__}: {e}")
 

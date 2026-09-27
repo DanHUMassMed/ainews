@@ -7,7 +7,7 @@ from backend.app.models.configuration import EditorialConfiguration
 
 INITIAL_CATEGORIES = [
     {"name": "AI Models", "slug": "ai-models"},
-    {"name": "Open AI", "slug": "open-ai"},
+    {"name": "Open Source", "slug": "open-source"},
     {"name": "Research", "slug": "research"},
     {"name": "Agents", "slug": "agents"},
     {"name": "Infrastructure", "slug": "infrastructure"},
@@ -74,6 +74,14 @@ INITIAL_CONFIGURATIONS = [
 
 async def seed() -> None:
     async with AsyncSessionLocal() as session:
+        # Check and migrate legacy open-ai category if present
+        res_legacy = await session.execute(select(Category).where(Category.slug == "open-ai"))
+        legacy_cat = res_legacy.scalar_one_or_none()
+        if legacy_cat:
+            legacy_cat.name = "Open Source"
+            legacy_cat.slug = "open-source"
+            print("  ~ Migrated legacy category: 'open-ai' -> 'open-source'")
+
         print("Seeding categories...")
         for cat_data in INITIAL_CATEGORIES:
             res = await session.execute(select(Category).where(Category.slug == cat_data["slug"]))

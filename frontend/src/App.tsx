@@ -4,6 +4,7 @@ import {
   fetchEditionByDate,
   fetchEditionsList,
   type EditionDetail,
+  type Story,
 } from './api';
 import { Header } from './components/Header';
 import { LeadStoryCard } from './components/LeadStoryCard';
@@ -153,11 +154,17 @@ export const App: React.FC = () => {
       );
     }
 
-    // Lead story is either edition.lead_story or first story flagged is_lead or first story in list
-    const lead =
-      edition.lead_story ||
-      allStories.find((s) => s.is_lead) ||
-      (allStories.length > 0 ? allStories[0] : null);
+    // Lead story selection:
+    // When a category filter is active, only select a lead story from matching stories
+    let lead: Story | null = null;
+    if (selectedCategory) {
+      lead = allStories.find((s) => s.is_lead) || (allStories.length > 0 ? allStories[0] : null);
+    } else {
+      lead =
+        edition.lead_story ||
+        allStories.find((s) => s.is_lead) ||
+        (allStories.length > 0 ? allStories[0] : null);
+    }
 
     const secondaries = allStories.filter((s) => s.id !== lead?.id);
 
@@ -365,7 +372,7 @@ export const App: React.FC = () => {
                 {leadStory ? (
                   <section style={{ marginBottom: '40px' }}>
                     <h2 className="story-section-title">
-                      <span>TODAY'S LEAD STORY</span>
+                      <span>{selectedCategory ? `LEAD STORY — ${selectedCategory.toUpperCase()}` : "TODAY'S LEAD STORY"}</span>
                     </h2>
                     <LeadStoryCard story={leadStory} />
                   </section>
@@ -388,8 +395,26 @@ export const App: React.FC = () => {
                     </div>
                   </section>
                 ) : !leadStory ? (
-                  <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>
-                    No stories available for this edition or category.
+                  <div style={{ textAlign: 'center', padding: '48px 20px', color: 'var(--text-muted)' }}>
+                    {selectedCategory ? (
+                      <div style={{ background: 'var(--bg-surface-raised)', border: '1px dashed var(--border-color)', padding: '32px', borderRadius: '10px', maxWidth: '520px', margin: '0 auto' }}>
+                        <p style={{ margin: '0 0 12px', fontSize: '1rem', color: 'var(--text-main)', fontWeight: 600 }}>
+                          No stories in today's briefing match {selectedCategory}.
+                        </p>
+                        <p style={{ margin: '0 0 16px', fontSize: '0.86rem' }}>
+                          Browse the full cross-edition coverage in the Taxonomy tab.
+                        </p>
+                        <button
+                          onClick={() => setCurrentView('categories')}
+                          className="action-btn-primary"
+                          style={{ margin: '0 auto', fontSize: '0.84rem' }}
+                        >
+                          Open Taxonomy Archive
+                        </button>
+                      </div>
+                    ) : (
+                      'No stories available for this edition.'
+                    )}
                   </div>
                 ) : null}
               </>

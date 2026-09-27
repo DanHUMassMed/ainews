@@ -17,7 +17,7 @@ async def test_public_categories_list(async_client):
     assert len(categories) >= 12
     slugs = [c["slug"] for c in categories]
     assert "ai-models" in slugs
-    assert "open-ai" in slugs
+    assert "open-source" in slugs
     assert "infrastructure" in slugs
 
 @pytest.mark.asyncio
@@ -76,7 +76,7 @@ async def test_candidate_batch_submit_and_query(async_client):
     assert "Novel Sparse Attention Mechanism for Long-Context LLMs" in titles
 
 @pytest.mark.asyncio
-async def test_full_draft_staging_and_publishing_flow(async_client):
+async def test_full_draft_staging_and_publishing_flow(async_client, db_session):
     test_suffix = uuid.uuid4().hex[:6]
     import random
     today = (date.today() + timedelta(days=random.randint(500, 50000))).isoformat()
@@ -176,3 +176,14 @@ async def test_full_draft_staging_and_publishing_flow(async_client):
     search_resp = await async_client.get("/api/public/search?q=Infrastructure")
     assert search_resp.status_code == 200
     assert len(search_resp.json()) >= 1
+
+    # Cleanup test edition & stories from DB to prevent pollution
+    from backend.app.models.story import Story
+    from backend.app.models.edition import Edition
+    from backend.app.models.feedback import Feedback
+    from sqlalchemy import delete
+    import uuid as uuid_pkg
+    await db_session.execute(delete(Feedback).where(Feedback.story_id == uuid_pkg.UUID(lead_story_id)))
+    await db_session.execute(delete(Story).where(Story.edition_id == uuid_pkg.UUID(edition_id)))
+    await db_session.execute(delete(Edition).where(Edition.id == uuid_pkg.UUID(edition_id)))
+    await db_session.commit()

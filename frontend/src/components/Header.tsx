@@ -71,7 +71,7 @@ export const Header: React.FC<HeaderProps> = ({
               LOCAL INTRANET EDITION
             </span>
             <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--primary)' }}>
-              FORWARD FUTURE STANDARDS
+              FRONTIER SIGNAL STANDARDS
             </span>
           </div>
         </div>

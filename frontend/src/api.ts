@@ -11,6 +11,7 @@ export interface Category {
   name: string;
   slug: string;
   description?: string;
+  story_count?: number;
 }
 
 export interface Story {
@@ -312,6 +313,14 @@ export async function resetScoringConfig(): Promise<ScoringConfigResponse> {
   });
   if (!res.ok) {
     throw new Error("Failed to reset scoring configuration");
+  }
+  return res.json();
+}
+
+export async function fetchCategoryStories(slug: string): Promise<Story[]> {
+  const res = await fetch(`/api/public/categories/${slug}`);
+  if (!res.ok) {
+    throw new Error(`Failed to load stories for category ${slug}`);
   }
   return res.json();
 }
