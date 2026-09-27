@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { ThumbsUp, ThumbsDown, ExternalLink, ChevronDown, ChevronUp, Zap, Sparkles, Clock, CheckCircle2 } from "lucide-react";
 import { type Story, sendFeedback } from "../api";
+import { cleanProseMarkdown, formatBodyMarkdown } from "../utils/markdown";
 
 interface LeadStoryCardProps {
   story: Story;
@@ -75,14 +76,18 @@ export const LeadStoryCard: React.FC<LeadStoryCardProps> = ({ story }) => {
         </div>
       )}
 
-      <p className="lead-summary">{story.summary}</p>
+      <div className="lead-summary">
+        <ReactMarkdown>{cleanProseMarkdown(story.summary)}</ReactMarkdown>
+      </div>
 
       <div className="why-matters-box">
         <div className="why-matters-label">
           <Sparkles size={14} />
           Why It Matters
         </div>
-        <div className="why-matters-text">{story.why_it_matters}</div>
+        <div className="why-matters-text">
+          <ReactMarkdown>{cleanProseMarkdown(story.why_it_matters)}</ReactMarkdown>
+        </div>
       </div>
 
       {story.body && (
@@ -105,7 +110,7 @@ export const LeadStoryCard: React.FC<LeadStoryCardProps> = ({ story }) => {
 
           {expanded && (
             <div className="story-body-block">
-              <ReactMarkdown>{story.body}</ReactMarkdown>
+              <ReactMarkdown>{formatBodyMarkdown(story.body)}</ReactMarkdown>
             </div>
           )}
         </>

@@ -29,6 +29,8 @@ from agents.app.agents import (
     create_selection_agent,
     create_writing_agent,
     create_critic_agent,
+    synthesize_story,
+    sanitize_story_completeness,
 )
 from agents.app.tools.editorial_mcp_tool import (
     get_editorial_context,
@@ -250,7 +252,7 @@ class EditorialWorkflow:
             evaluated_candidates = await self.step_evaluation(dossiers, context)
 
             # 5. Selection Phase (Story Mix, Low-Signal Gate & Backup Opportunity Recovery)
-            selected_stories, low_signal_notice = await self.step_selection(evaluated_candidates)
+            selected_stories, low_signal_notice = await self.step_selection(evaluated_candidates, context=context)
             result.low_signal = low_signal_notice is not None
 
             # Mark selected flags and metadata on evaluated_candidates for DB audit trail
@@ -455,7 +457,7 @@ class EditorialWorkflow:
                 "why_it_matters": lead.get("why_it_matters", ""),
                 "publisher": lead.get("publisher", wl_entry.domain if wl_entry else "Web"),
                 "tier": lead.get("tier", wl_entry.tier if wl_entry else "Tier 3"),
-                "category_slugs": inferred_cats,
+                "category_slugs": lead.get("category_slugs") or inferred_cats,
                 "is_lead": lead.get("is_lead", False),
                 "published_at": pub_at_str or datetime.now(timezone.utc).isoformat(),
                 "significance": lead.get("significance"),
@@ -525,194 +527,37 @@ class EditorialWorkflow:
             })
         return evaluated
 
-    async def step_selection(self, evaluated_candidates: List[Dict[str, Any]]) -> tuple[List[Dict[str, Any]], Optional[str]]:
-        """Select 3-7 stories balancing Core, Exploratory, and Contrarian tiers.
-        If fewer than 5 fresh stories qualify, pulls high-value opportunities from the stale backup pool.
+    async def step_selection(
+        self,
+        evaluated_candidates: List[Dict[str, Any]],
+        context: Optional[Dict[str, Any]] = None
+    ) -> tuple[List[Dict[str, Any]], Optional[str]]:
+        """Selection Phase (Selection Agent): Reviews entire newsletter layout as a single document,
+        enforces portfolio balance (Core, Exploratory, Contrarian), strict source & corporate entity
+        diversity (max 1 per entity unless score >= 8.5; never >= 3; anti-clustering interleaving),
+        and handles low-signal day constraints.
         """
-        valid_pool = [c for c in evaluated_candidates if c.get("tier") in ("Core", "Exploratory", "Contrarian")]
-        valid_pool.sort(key=lambda x: x["score"], reverse=True)
-
-        stale_backup_pool = [c for c in evaluated_candidates if c.get("tier") == "Stale Backup"]
-        stale_backup_pool.sort(key=lambda x: x["score"], reverse=True)
-
-        core_stories = [c for c in valid_pool if c["tier"] == "Core"]
-        exploratory_stories = [c for c in valid_pool if c["tier"] == "Exploratory"]
-        contrarian_stories = [c for c in valid_pool if c["tier"] == "Contrarian"]
-
-        selected = []
-        if core_stories:
-            selected.append(core_stories[0])
-        if exploratory_stories:
-            selected.append(exploratory_stories[0])
-        if contrarian_stories:
-            selected.append(contrarian_stories[0])
-
-        for c in valid_pool:
-            if len(selected) >= 7:
-                break
-            if c not in selected:
-                selected.append(c)
-
-        # Requirement 2: Stale (>48h) High-Value Opportunity Backup Recovery
-        # If fewer than 5 fresh stories met the threshold, pull high-value opportunities from stale backup
-        if len(selected) < 5 and stale_backup_pool:
-            logger.info(
-                f"Fresh story count ({len(selected)}) is below standard (5). "
-                f"Recovering up to {5 - len(selected)} high-value opportunities from {len(stale_backup_pool)} backup items..."
-            )
-            for s_cand in stale_backup_pool:
-                if len(selected) >= 5:
-                    break
-                if s_cand not in selected:
-                    s_cand["tier"] = "Recovered Archive"
-                    s_cand["recovered_from_backup"] = True
-                    s_cand["selected"] = True
-                    s_cand["rejected_reason"] = None
-                    selected.append(s_cand)
-
-        # Ensure exactly one lead story is selected (the highest ranked)
-        for idx, s in enumerate(selected):
-            s["is_lead"] = (idx == 0)
-            s["selected"] = True
-
-        notice = None
-        if len(selected) < 5:
-            notice = (
-                f"Low-signal day in the AI ecosystem: {len(selected)} high-substance verified stories "
-                f"met the publication threshold (standard is 5-7)."
-            )
-
-        return selected, notice
+        from agents.app.agents.selection import select_edition_lineup
+        return await select_edition_lineup(
+            evaluated_candidates,
+            context=context,
+            live=self.live,
+            min_stories=5,
+            max_stories=7,
+        )
 
     async def _synthesize_candidate(self, c: Dict[str, Any], idx: int) -> Dict[str, Any]:
-        """Synthesizes a publication-grade story using LiteLLM/OpenRouter with structured fallback."""
+        """Synthesizes a publication-grade newspaper story using the Writing Agent with self-review."""
         pub_name = c.get('publisher', 'Frontier Lab')
         c_title = (c.get('title') or '').strip() or f"AI Architecture Update from {pub_name}"
-        raw_text = c.get("content") or c.get("summary") or c.get("snippet") or ""
-        clean_context = re.sub(r"<[^>]+>", " ", html.unescape(raw_text)).strip()
 
-        headline = None
-        summary = None
-        why_it_matters = None
-        body = None
+        # Delegate directly to Writing Agent synthesis runner with self-review loop
+        story_item = await synthesize_story(c, idx=idx, live=self.live)
 
-        # 1. Attempt LLM Synthesis via OpenRouter (only in live mode)
-        if self.live:
-            try:
-                from litellm import acompletion
-                from agents.app.config import get_agent_model, OPENROUTER_API_KEY
-                model = get_agent_model("writing")
-                api_key = OPENROUTER_API_KEY or os.getenv("OPENROUTER_API_KEY")
-                
-                prompt = f"""You are the senior technical editor for AI Industry News Daily.
-Synthesize an authoritative, high-density briefing item for:
-Title: {c_title}
-Publisher: {pub_name}
-Source URL: {c.get('url')}
-Raw Excerpt / Context: {clean_context[:1200]}
-
-Requirements:
-1. "headline": Clear, declarative technical headline (15-100 chars, zero marketing hype or buzzwords).
-2. "summary": 2-3 dense paragraphs (min 180 chars, zero HTML tags). Detail what was introduced, technical specifications, training compute/framework, and performance deltas.
-3. "why_it_matters": 2-3 concise sentences (min 60 chars) on production implications, developer economics, or architectural shifts.
-4. "body": Structured technical deep-dive in Markdown (min 500 chars). Use ### headings such as ### Architectural & Benchmark Analysis, ### Compute Economics & Scaling, ### Enterprise Integration Takeaways.
-5. "category_slugs": 1 to 2 most relevant category slugs chosen strictly from: ["ai-models", "agents", "infrastructure", "hardware", "developer-tools", "research", "enterprise-ai", "regulation", "robotics", "science-ai", "ai-business", "open-source"].
-
-Return ONLY a valid JSON object with keys: "headline", "summary", "why_it_matters", "body", "category_slugs"."""
-
-                resp = await asyncio.wait_for(
-                    acompletion(
-                        model=model,
-                        messages=[{"role": "user", "content": prompt}],
-                        max_tokens=2600,
-                        api_key=api_key
-                    ),
-                    timeout=90.0
-                )
-                raw = (resp.choices[0].message.content or "").strip()
-                data = {}
-                clean = raw
-                if "```json" in clean:
-                    clean = clean.split("```json")[1].split("```")[0].strip()
-                elif "```" in clean:
-                    clean = clean.split("```")[1].split("```")[0].strip()
-                try:
-                    data = json.loads(clean)
-                except Exception:
-                    # Robust regex recovery for partial or truncated JSON
-                    for key in ["headline", "summary", "why_it_matters", "body"]:
-                        m = re.search(r"\"" + key + r"\"\s*:\s*\"(.*?)(?<!\\)\"", raw, re.DOTALL)
-                        if m:
-                            try:
-                                data[key] = m.group(1).encode("utf-8").decode("unicode_escape", errors="replace")
-                            except Exception:
-                                data[key] = m.group(1)
-                        elif key == "body":
-                            m_trunc = re.search(r"\"body\"\s*:\s*\"(.*)$", raw, re.DOTALL)
-                            if m_trunc:
-                                val = m_trunc.group(1).rstrip(" \"}\n")
-                                try:
-                                    data[key] = val.encode("utf-8").decode("unicode_escape", errors="replace")
-                                except Exception:
-                                    data[key] = val
-
-                if data.get("headline") and len(data["headline"].strip()) >= 15:
-                    headline = data["headline"].strip()
-                if data.get("summary") and len(data["summary"].strip()) >= 100:
-                    summary = data["summary"].strip()
-                if data.get("why_it_matters") and len(data["why_it_matters"].strip()) >= 40:
-                    why_it_matters = data["why_it_matters"].strip()
-                if data.get("body") and len(data["body"].strip()) >= 250:
-                    body = data["body"].strip()
-                if data.get("category_slugs") and isinstance(data["category_slugs"], list):
-                    valid_slugs = {
-                        "ai-models", "agents", "infrastructure", "hardware", "developer-tools",
-                        "research", "enterprise-ai", "regulation", "robotics", "science-ai", "ai-business", "open-source"
-                    }
-                    llm_cats = [s for s in data["category_slugs"] if s in valid_slugs]
-                    if llm_cats:
-                        c["category_slugs"] = llm_cats
-            except Exception as e:
-                logger.warning(f"LLM synthesis for {c_title} failed or timed out: {type(e).__name__}: {e}")
-
-        # 2. Rich Domain-Specific Fallback if LLM failed
-        cat_slug = (c.get('category_slugs') or ['ai-models'])[0].lower()
-        if not headline:
-            headline = c_title if len(c_title) >= 15 else f"Technical Announcement: {pub_name} Systems Update #{idx + 1}"
-        if not summary:
-            summary = (
-                f"{clean_context[:350]}... " if len(clean_context) >= 150 else
-                f"Engineering and research teams from {pub_name} have announced substantial advances in {cat_slug}. "
-                f"The release introduces optimized inference pipelines, improved memory bandwidth utilization, and verifiable benchmark improvements across standardized evaluation suites."
-            )
-        if not why_it_matters:
-            category_impacts = {
-                "ai-chips": "directly impacts compute density and memory bandwidth economics, altering infrastructure cost models for frontier training clusters.",
-                "hardware": "directly impacts compute density and memory bandwidth economics, altering infrastructure cost models for frontier training clusters.",
-                "agents": "accelerates autonomous tool-use fidelity and state management in production agent systems, reducing human-in-the-loop oversight.",
-                "enterprise": "reduces deployment friction and improves latency budgets for enterprise AI integration, establishing new operational benchmarks.",
-                "open-source": "democratizes access to high-parameter sovereign weights, giving developers an open alternative to proprietary cloud API lock-in.",
-                "research": "challenges established architectural assumptions and sets new empirical baselines for reasoning efficiency.",
-                "multimodal": "expands cross-modal reasoning capabilities and low-latency perceptual processing for real-time edge and vision systems.",
-            }
-            impact = category_impacts.get(cat_slug, "alters architectural efficiency baselines and deployment latency budgets for next-generation AI workloads.")
-            why_it_matters = f"For practitioners deploying systems in the {pub_name} ecosystem, this development {impact}" 
-        if not body:
-            body = f"""### Architectural & Benchmark Analysis
-
-{summary}
-
-Empirical evaluations verify measurable accuracy retention and throughput efficiency under heavy production concurrency. The underlying framework optimizes matrix multiplication kernels and memory access patterns.
-
-### Compute Economics & Scaling
-
-{why_it_matters}
-
-By decoupling compute scaling from fixed parameter boundaries, these findings enable teams to allocate hardware resources dynamically across reasoning phases.
-
-### Enterprise Integration Takeaways
-
-Engineering teams evaluating this announcement should monitor downstream evaluation metrics and test compatibility against their existing inference serving stack."""
+        headline = story_item.get("headline") or story_item.get("title") or c_title
+        summary = story_item.get("summary", "")
+        why_it_matters = story_item.get("why_it_matters", "")
+        body = story_item.get("body", "")
 
         # Clean any HTML entities/tags thoroughly
         headline = re.sub(r"<[^>]+>", "", html.unescape(headline)).strip()
@@ -752,7 +597,7 @@ Engineering teams evaluating this announcement should monitor downstream evaluat
             "is_lead": c.get("is_lead", (idx == 0)),
             "position": idx,
             "published_at": pub_at,
-            "category_slugs": c.get("category_slugs", ["ai-models"]),
+            "category_slugs": story_item.get("category_slugs") or c.get("category_slugs", ["ai-models"]),
             "sources": [{
                 "url": c["url"],
                 "title": headline,
@@ -820,6 +665,12 @@ Engineering teams evaluating this announcement should monitor downstream evaluat
                     if buzz in s.get("title", "").lower() or buzz in s.get("summary", "").lower():
                         violations.append(f"Story #{idx} contains prohibited buzzword: '{buzz}'.")
 
+                # Check for trailing ellipses or ellipsis anywhere indicating incomplete thought
+                if any(s.get(k, "").rstrip().endswith("...") or s.get(k, "").rstrip().endswith("…") for k in ["title", "summary", "why_it_matters"]):
+                    violations.append(f"Story #{idx} contains trailing ellipses ('...').")
+                if any(nav in s.get("summary", "") for nav in ["GITHUB HUGGING FACE", "MODELSCOPE DEMO DISCORD"]):
+                    violations.append(f"Story #{idx} contains raw website navigation debris.")
+
             slugs = [s["slug"] for s in current_stories]
             if len(slugs) != len(set(slugs)):
                 violations.append("Duplicate slugs detected.")
@@ -834,8 +685,12 @@ Engineering teams evaluating this announcement should monitor downstream evaluat
             revised_stories = []
             seen_slugs = set()
             for idx, s in enumerate(current_stories):
-                clean_title = s["title"]
-                clean_summary = s["summary"]
+                cand_ref = dossiers[idx] if idx < len(dossiers) else None
+                s_sanitized = sanitize_story_completeness(s, candidate=cand_ref)
+                clean_title = s_sanitized["title"]
+                clean_summary = s_sanitized["summary"]
+                clean_why = s_sanitized["why_it_matters"]
+                clean_body = s_sanitized["body"]
                 for buzz in PROHIBITED_BUZZWORDS:
                     clean_title = re.sub(buzz, "consequential", clean_title, flags=re.IGNORECASE)
                     clean_summary = re.sub(buzz, "consequential", clean_summary, flags=re.IGNORECASE)
@@ -850,7 +705,8 @@ Engineering teams evaluating this announcement should monitor downstream evaluat
                     "title": clean_title,
                     "summary": clean_summary,
                     "slug": slug,
-                    "why_it_matters": s["why_it_matters"] or "Direct operational and architectural impact on frontier AI engineering.",
+                    "why_it_matters": clean_why or "Direct operational and architectural impact on frontier AI engineering.",
+                    "body": clean_body,
                 })
             current_stories = revised_stories
 

@@ -348,6 +348,14 @@ a {
   margin-bottom: 24px;
 }
 
+.lead-summary p {
+  margin: 0 0 14px 0;
+}
+
+.lead-summary p:last-child {
+  margin-bottom: 0;
+}
+
 /* Why It Matters Callout */
 .why-matters-box {
   background: var(--bg-surface-raised);
@@ -374,6 +382,11 @@ a {
   color: var(--text-main);
   font-weight: 500;
   line-height: 1.55;
+}
+
+.why-matters-text p {
+  margin: 0;
+  display: inline;
 }
 
 /* Hero Image Containers */
@@ -631,6 +644,14 @@ a {
   line-height: 1.6;
   margin-bottom: 16px;
   flex: 1;
+}
+
+.story-card-summary p {
+  margin: 0 0 10px 0;
+}
+
+.story-card-summary p:last-child {
+  margin-bottom: 0;
 }
 
 /* Expand toggle button */

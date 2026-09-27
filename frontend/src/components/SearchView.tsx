@@ -1,4 +1,6 @@
 import React, { useState } from "react";
+import ReactMarkdown from "react-markdown";
+import { cleanProseMarkdown } from "../utils/markdown";
 import { Search as SearchIcon, ExternalLink, Sparkles } from "lucide-react";
 import { type Story, searchStories } from "../api";
 
@@ -83,7 +85,9 @@ export const SearchView: React.FC = () => {
               {story.title}
             </h3>
 
-            <p className="story-card-summary">{story.summary}</p>
+            <div className="story-card-summary">
+              <ReactMarkdown>{cleanProseMarkdown(story.summary)}</ReactMarkdown>
+            </div>
 
             <div className="why-matters-box" style={{ padding: "10px 14px", margin: "12px 0" }}>
               <div className="why-matters-label" style={{ fontSize: "0.72rem" }}>
@@ -91,7 +95,7 @@ export const SearchView: React.FC = () => {
                 Why It Matters
               </div>
               <div className="why-matters-text" style={{ fontSize: "0.9rem" }}>
-                {story.why_it_matters}
+                <ReactMarkdown>{cleanProseMarkdown(story.why_it_matters)}</ReactMarkdown>
               </div>
             </div>
 
