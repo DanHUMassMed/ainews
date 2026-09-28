@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime, timezone, timedelta
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Tuple, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, case
 from backend.app.models.feedback import Feedback
@@ -10,6 +10,40 @@ from backend.app.models.configuration import EditorialConfiguration
 from backend.app.schemas.feedback import FeedbackAnalyticsResponse, CategoryFeedbackItem
 
 class FeedbackService:
+    @staticmethod
+    async def get_story_votes(session: AsyncSession, story_id: uuid.UUID) -> Tuple[int, int]:
+        """Returns (upvotes, downvotes) for a story in a single aggregated query."""
+        stmt = select(
+            func.coalesce(func.sum(case((Feedback.vote == 1, 1), else_=0)), 0),
+            func.coalesce(func.sum(case((Feedback.vote == -1, 1), else_=0)), 0),
+        ).where(Feedback.story_id == story_id)
+        res = await session.execute(stmt)
+        row = res.fetchone()
+        if not row:
+            return (0, 0)
+        return int(row[0] or 0), int(row[1] or 0)
+
+    @staticmethod
+    async def get_stories_votes_batch(session: AsyncSession, story_ids: List[uuid.UUID]) -> Dict[uuid.UUID, Tuple[int, int]]:
+        """Returns mapping of story_id -> (upvotes, downvotes) in a single batch query."""
+        if not story_ids:
+            return {}
+        stmt = (
+            select(
+                Feedback.story_id,
+                func.coalesce(func.sum(case((Feedback.vote == 1, 1), else_=0)), 0),
+                func.coalesce(func.sum(case((Feedback.vote == -1, 1), else_=0)), 0),
+            )
+            .where(Feedback.story_id.in_(story_ids))
+            .group_by(Feedback.story_id)
+        )
+        res = await session.execute(stmt)
+        mapping = {s_id: (0, 0) for s_id in story_ids}
+        for row in res.fetchall():
+            s_id, up, dn = row
+            mapping[s_id] = (int(up or 0), int(dn or 0))
+        return mapping
+
     @staticmethod
     async def is_cold_start_active(session: AsyncSession) -> bool:
         # Check configuration

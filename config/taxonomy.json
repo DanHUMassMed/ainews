@@ -1,0 +1,73 @@
+{
+  "common_entities": [
+    "OpenAI",
+    "Anthropic",
+    "Google",
+    "Meta",
+    "Microsoft",
+    "NVIDIA",
+    "Apple",
+    "DeepSeek",
+    "Mistral",
+    "Cohere",
+    "Amazon",
+    "AMD",
+    "Intel",
+    "Hugging Face",
+    "xAI",
+    "Cerebras",
+    "Groq",
+    "TSMC",
+    "Alibaba",
+    "Tencent",
+    "Baidu"
+  ],
+  "category_keywords": {
+    "hardware": [
+      "blackwell", "gpu", "tpu", "npu", "wafer", "silicon",
+      "chips", "accelerator", "cerebras", "nvidia", "amd",
+      "semiconductor", "h100", "b200", "gb200", "asic", "hbm"
+    ],
+    "agents": [
+      "agent", "autonomous", "tool use", "mcp", "agentic", "runtime",
+      "harness", "workflow", "browser agent", "multi-agent", "code agent"
+    ],
+    "ai-models": [
+      "model", "weights", "llm", "parameters", "qwen", "deepseek","gemma",
+      "mistral", "llama", "claude", "gpt", "checkpoint", "vision", "open weight", "gemini"
+    ],
+    "open-source": [
+      "open source", "open-source", "open weight", "open-weight", "open weights",
+      "weights released", "apache 2.0", "mit license", "hugging face", "huggingface", "github"
+    ],
+    "research": [
+      "paper", "arxiv", "benchmark", "reasoning", "attention",
+      "transformer", "architecture", "theorem", "sparse attention", "pre-training", "interpretability"
+    ],
+    "developer-tools": [
+      "sdk", "library", "framework", "pytorch", "vllm",
+      "tensorrt", "triton", "ollama", "huggingface", "developer", "api", "ide"
+    ],
+    "robotics": [
+      "robot", "humanoid", "embodied", "actuator", "vla", "manipulation", "boston dynamics", "figure"
+    ],
+    "regulation": [
+      "regulation", "policy", "copyright", "ftc", "legal", "eu ai act",
+      "safety institute", "compliance", "antitrust", "legislation", "governance"
+    ],
+    "science-ai": [
+      "science", "scientific", "biology", "protein", "alphafold", "chemistry",
+      "materials", "genomics", "clinical", "biotech"
+    ],
+    "ai-business": [
+      "valuation", "funding", "seed round", "series a", "series b", "series c",
+      "venture", "acquisition", "market cap", "ipo"
+    ],
+    "enterprise-ai": [
+      "enterprise", "sovereign", "deployment", "customer", "forward deployed", "enterprise ai"
+    ],
+    "infrastructure": [
+      "infrastructure", "serving", "inference engine", "latency", "throughput", "cluster networking", "kv-cache"
+    ]
+  }
+}

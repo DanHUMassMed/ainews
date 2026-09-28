@@ -1,6 +1,8 @@
 import uuid
 from datetime import date, datetime, timezone
-from typing import List, Optional
+import logging
+from typing import List, Optional, Tuple, Dict
+logger = logging.getLogger("ainews.api.public")
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, or_, desc, text
@@ -20,13 +22,11 @@ from backend.app.services.feedback import FeedbackService
 
 router = APIRouter(prefix="/public", tags=["Public Reader API"])
 
-async def build_story_response(story: Story, session: AsyncSession) -> StoryResponse:
-    up_res = await session.execute(
-        select(func.count(Feedback.id)).where(and_(Feedback.story_id == story.id, Feedback.vote == 1))
-    )
-    dn_res = await session.execute(
-        select(func.count(Feedback.id)).where(and_(Feedback.story_id == story.id, Feedback.vote == -1))
-    )
+async def build_story_response(story: Story, session: AsyncSession, votes: Optional[Tuple[int, int]] = None) -> StoryResponse:
+    if votes is not None:
+        upvotes, downvotes = votes
+    else:
+        upvotes, downvotes = await FeedbackService.get_story_votes(session, story.id)
     return StoryResponse(
         id=story.id,
         edition_id=story.edition_id,
@@ -39,8 +39,8 @@ async def build_story_response(story: Story, session: AsyncSession) -> StoryResp
         status=story.status,
         is_lead=story.is_lead,
         position=story.position,
-        upvotes=up_res.scalar() or 0,
-        downvotes=dn_res.scalar() or 0,
+        upvotes=upvotes,
+        downvotes=downvotes,
         created_at=story.created_at,
         updated_at=story.updated_at,
         published_at=story.published_at,
@@ -67,8 +67,9 @@ async def get_today_edition(db: AsyncSession = Depends(get_db)):
 
     story_responses = []
     lead_story_resp = None
+    votes_map = await FeedbackService.get_stories_votes_batch(db, [s.id for s in edition.stories])
     for s in edition.stories:
-        sr = await build_story_response(s, db)
+        sr = await build_story_response(s, db, votes=votes_map.get(s.id, (0, 0)))
         story_responses.append(sr)
         if s.is_lead:
             lead_story_resp = sr
@@ -105,8 +106,9 @@ async def get_edition_by_date(edition_date: date, db: AsyncSession = Depends(get
 
     story_responses = []
     lead_story_resp = None
+    votes_map = await FeedbackService.get_stories_votes_batch(db, [s.id for s in edition.stories])
     for s in edition.stories:
-        sr = await build_story_response(s, db)
+        sr = await build_story_response(s, db, votes=votes_map.get(s.id, (0, 0)))
         story_responses.append(sr)
         if s.is_lead:
             lead_story_resp = sr
@@ -196,7 +198,8 @@ async def get_stories_by_category(slug: str, skip: int = 0, limit: int = 20, db:
     )
     res = await db.execute(stmt)
     stories = res.scalars().all()
-    return [await build_story_response(s, db) for s in stories]
+    votes_map = await FeedbackService.get_stories_votes_batch(db, [s.id for s in stories])
+    return [await build_story_response(s, db, votes=votes_map.get(s.id, (0, 0))) for s in stories]
 
 @router.get("/search", response_model=List[StoryResponse])
 async def search_stories(q: str = Query(..., min_length=2), limit: int = 25, db: AsyncSession = Depends(get_db)):
@@ -215,7 +218,8 @@ async def search_stories(q: str = Query(..., min_length=2), limit: int = 25, db:
         )
         res = await db.execute(ts_stmt)
         stories = res.scalars().all()
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Full-text search failed for '{query_str}', falling back to ILIKE: {e}")
         # ILIKE fallback
         like_q = f"%{query_str}%"
         stmt = (
@@ -234,7 +238,8 @@ async def search_stories(q: str = Query(..., min_length=2), limit: int = 25, db:
         res = await db.execute(stmt)
         stories = res.scalars().all()
 
-    return [await build_story_response(s, db) for s in stories]
+    votes_map = await FeedbackService.get_stories_votes_batch(db, [s.id for s in stories])
+    return [await build_story_response(s, db, votes=votes_map.get(s.id, (0, 0))) for s in stories]
 
 @router.post("/feedback", response_model=FeedbackResponse)
 async def submit_feedback(data: FeedbackSubmitRequest, db: AsyncSession = Depends(get_db)):

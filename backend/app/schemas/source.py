@@ -14,25 +14,8 @@ class SourceBase(BaseModel):
     @field_validator("published_at", mode="before")
     @classmethod
     def parse_datetime_flexible(cls, v):
-        if v is None or v == "":
-            return None
-        if isinstance(v, datetime):
-            return v
-        if isinstance(v, str):
-            try:
-                dt = parsedate_to_datetime(v)
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
-                return dt
-            except Exception:
-                pass
-            try:
-                dt = datetime.fromisoformat(v.replace("Z", "+00:00"))
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
-                return dt
-            except Exception:
-                return None
+        from backend.app.utils.dates import parse_datetime_flexible as _parse_dt
+        return _parse_dt(v)
         return v
 
 class SourceCreate(SourceBase):

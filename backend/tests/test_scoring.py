@@ -58,3 +58,33 @@ def test_portfolio_partition_sufficient_candidates():
     assert is_low_signal is False
     assert notice == ""
     assert len(selected) == 8
+
+def test_portfolio_partition_empty():
+    selected, is_low_signal, notice = ScoringEngine.partition_portfolio([], target_count=5)
+    assert selected == []
+    assert is_low_signal is True
+    assert "Low-signal day" in notice
+
+def test_portfolio_partition_identical_scores():
+    candidates = [
+        {
+            "title": f"Story {i}",
+            "composite_score": 7.0,
+            "novelty_score": 7.0,
+            "saturation_score": 3.0,
+            "url": f"https://example.com/s{i}",
+        }
+        for i in range(10)
+    ]
+    selected, is_low_signal, notice = ScoringEngine.partition_portfolio(candidates, target_count=5)
+    assert len(selected) == 5
+    assert is_low_signal is False
+
+def test_portfolio_partition_missing_optional_keys():
+    candidates = [
+        {"title": f"Story {i}", "composite_score": 6.5, "url": f"https://example.com/{i}"}
+        for i in range(6)
+    ]
+    selected, is_low_signal, notice = ScoringEngine.partition_portfolio(candidates, target_count=5)
+    assert len(selected) == 5
+    assert is_low_signal is False

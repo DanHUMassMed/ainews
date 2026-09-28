@@ -8,24 +8,8 @@ class DeduplicationService:
         """
         Strips marketing tracking parameters (utm_*, ref, etc.) and fragments.
         """
-        if not url:
-            return ""
-        parsed = urlparse(url.strip())
-        netloc = parsed.netloc.lower()
-        if netloc.startswith("www."):
-            netloc = netloc[4:]
-        
-        # Remove common tracking params
-        query_parts = []
-        if parsed.query:
-            for param in parsed.query.split("&"):
-                k = param.split("=")[0].lower()
-                if not (k.startswith("utm_") or k in ("ref", "source", "fbclid", "gclid", "t", "spm")):
-                    query_parts.append(param)
-        
-        new_query = "&".join(query_parts)
-        path = parsed.path.rstrip("/")
-        return urlunparse((parsed.scheme.lower(), netloc, path, "", new_query, ""))
+        from backend.app.utils.urls import normalize_url
+        return normalize_url(url)
 
     @staticmethod
     def tokenize_title(title: str) -> Set[str]:

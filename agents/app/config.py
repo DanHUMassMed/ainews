@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 from typing import Optional
 from dotenv import load_dotenv
+from backend.app.core.config import settings
 
 # Ensure environment variables are loaded
 env_path = Path(__file__).resolve().parent.parent.parent / ".env"
@@ -46,15 +47,15 @@ def get_agent_model(role: str) -> str:
     raw_model = MODEL_REGISTRY.get(role.lower(), DEFAULT_LLM_MODEL)
     return normalize_model_name(raw_model)
 
-# Host and Port Configuration
-APP_HOST = os.getenv("APP_HOST", "192.168.1.101")
-BACKEND_PORT = os.getenv("BACKEND_PORT", "8000")
-FRONTEND_PORT = os.getenv("FRONTEND_PORT", "5173")
+# Host and Port Configuration sourced from unified backend settings
+APP_HOST = os.getenv("APP_HOST", settings.APP_HOST)
+BACKEND_PORT = os.getenv("BACKEND_PORT", str(settings.BACKEND_PORT))
+FRONTEND_PORT = os.getenv("FRONTEND_PORT", str(settings.FRONTEND_PORT))
 
 # Editorial MCP configuration
 EDITORIAL_MCP_URL = os.getenv("EDITORIAL_MCP_URL", f"http://{APP_HOST}:{BACKEND_PORT}/api/editorial")
-EDITORIAL_API_TOKEN = os.getenv("EDITORIAL_SECRET_KEY") or os.getenv("EDITORIAL_API_TOKEN", "secret-token-change-in-production")
+EDITORIAL_API_TOKEN = os.getenv("EDITORIAL_SECRET_KEY") or os.getenv("EDITORIAL_API_TOKEN", settings.EDITORIAL_SECRET_KEY)
 
 # Search & Retrieval Services
-SEARXNG_URL = os.getenv("SEARXNG_URL", "http://127.0.0.1:8080")
-FIRECRAWL_URL = os.getenv("FIRECRAWL_URL", "http://127.0.0.1:3002")
+SEARXNG_URL = os.getenv("SEARXNG_URL", settings.SEARXNG_URL)
+FIRECRAWL_URL = os.getenv("FIRECRAWL_URL", settings.FIRECRAWL_URL)

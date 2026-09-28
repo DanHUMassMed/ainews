@@ -1,12 +1,8 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import {
-  fetchTodayEdition,
-  fetchEditionByDate,
-  fetchEditionsList,
-  type EditionDetail,
-  type Story,
-} from './api';
+import { type Story } from './api';
+import { useEdition } from './hooks/useEdition';
 import { Header } from './components/Header';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { LeadStoryCard } from './components/LeadStoryCard';
 import { StoryCard } from './components/StoryCard';
 import { ArchiveView } from './components/ArchiveView';
@@ -35,87 +31,20 @@ export const App: React.FC = () => {
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
 
-  // Edition state
-  const [edition, setEdition] = useState<EditionDetail | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [error, setError] = useState<string | null>(null);
-  const [fallbackNotice, setFallbackNotice] = useState<string | null>(null);
+  // Edition state managed via custom hook
+  const {
+    edition,
+    loading,
+    error,
+    fallbackNotice,
+    loadEdition,
+  } = useEdition(currentView, selectedDate);
 
   // Apply theme to html root
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
     localStorage.setItem('ainews_theme', isDark ? 'dark' : 'light');
   }, [isDark]);
-
-  // Fetch edition data when viewing 'today' (or specific date) with graceful fallback
-  const loadEdition = async (dateStr?: string | null) => {
-    setLoading(true);
-    setError(null);
-    setFallbackNotice(null);
-    try {
-      let data: EditionDetail;
-      if (dateStr) {
-        data = await fetchEditionByDate(dateStr);
-      } else {
-        try {
-          data = await fetchTodayEdition();
-        } catch (todayErr: any) {
-          console.warn("Today's briefing not available or server error, falling back to archive:", todayErr);
-          // Graceful fallback to latest published edition from archive
-          try {
-            const archive = await fetchEditionsList();
-            if (archive && archive.length > 0) {
-              data = await fetchEditionByDate(archive[0].date);
-              setFallbackNotice(
-                `Today's edition is currently being finalized. Showing latest published briefing from ${archive[0].date}.`
-              );
-            } else {
-              throw todayErr;
-            }
-          } catch (archiveErr) {
-            // Check localStorage cache as secondary fallback
-            const cached = localStorage.getItem("ainews_cached_edition");
-            if (cached) {
-              data = JSON.parse(cached);
-              setFallbackNotice(
-                `Server temporarily unreachable. Showing cached briefing from ${data.date}.`
-              );
-            } else {
-              throw todayErr;
-            }
-          }
-        }
-      }
-      setEdition(data);
-      if (!dateStr && !fallbackNotice) {
-        try {
-          localStorage.setItem("ainews_cached_edition", JSON.stringify(data));
-        } catch (_) {}
-      }
-    } catch (err: any) {
-      console.error('Error fetching edition:', err);
-      // As a last resort, check offline cache
-      const cached = localStorage.getItem("ainews_cached_edition");
-      if (cached) {
-        try {
-          const parsed = JSON.parse(cached);
-          setEdition(parsed);
-          setFallbackNotice(`Offline mode: Showing cached briefing from ${parsed.date}.`);
-          setError(null);
-          return;
-        } catch (_) {}
-      }
-      setError(err?.message || 'Failed to load edition');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    if (currentView === 'today') {
-      loadEdition(selectedDate);
-    }
-  }, [currentView, selectedDate]);
 
   const handleToggleTheme = () => {
     setIsDark((prev) => !prev);
@@ -183,6 +112,7 @@ export const App: React.FC = () => {
       />
 
       <main className="main-content">
+        <ErrorBoundary>
         {currentView === 'today' && (
           <>
             {selectedDate && (
@@ -436,6 +366,7 @@ export const App: React.FC = () => {
         {currentView === 'search' && <SearchView />}
 
         {currentView === 'admin' && <AdminInspector />}
+        </ErrorBoundary>
       </main>
 
       <footer className="site-footer">

@@ -24,14 +24,10 @@ DEFAULT_WEIGHTS = {
     "feedback_weight": 0.15,
 }
 
+from backend.app.utils.urls import extract_domain as _extract_domain
+
 def extract_domain(url: str) -> str:
-    try:
-        netloc = urlparse(url).netloc.lower()
-        if netloc.startswith("www."):
-            netloc = netloc[4:]
-        return netloc or "web"
-    except Exception:
-        return "web"
+    return _extract_domain(url, default="web")
 
 class ScoringEngine:
     @staticmethod

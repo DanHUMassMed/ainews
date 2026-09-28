@@ -86,8 +86,8 @@ class WhitelistService:
                     )
                     entries.append(entry)
                     domain_map[entry.domain] = entry
-                except Exception as e:
-                    logger.error(f"Error parsing whitelist entry {url_p}: {e}")
+                except (KeyError, ValueError, TypeError) as e:
+                    logger.warning("Error parsing whitelist entry %s: %s (type=%s)", url_p, e, type(e).__name__)
 
         cls._entries = entries
         cls._domain_map = domain_map
@@ -116,18 +116,8 @@ class WhitelistService:
     @classmethod
     def extract_domain(cls, url: str) -> str:
         """Extracts normalized hostname from a URL string."""
-        if not url:
-            return ""
-        if not url.startswith("http://") and not url.startswith("https://"):
-            url = f"https://{url}"
-        try:
-            parsed = urlparse(url)
-            host = parsed.netloc.lower()
-            if host.startswith("www."):
-                host = host[4:]
-            return host
-        except Exception:
-            return ""
+        from backend.app.utils.urls import extract_domain
+        return extract_domain(url)
 
     @classmethod
     def get_source_for_url(cls, url: str) -> Optional[WhitelistEntry]:

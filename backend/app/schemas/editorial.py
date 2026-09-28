@@ -57,3 +57,41 @@ class EditorialContextResponse(BaseModel):
     feedback_analytics: FeedbackAnalyticsResponse
     repetition_avoid_topics: List[str] = []
     portfolio_targets: Dict[str, int] = {"core": 70, "exploratory": 20, "contrarian": 10}
+
+class AdminAuthResponse(BaseModel):
+    status: str
+    token: str
+    message: str
+
+class CandidateBatchSubmitResponse(BaseModel):
+    status: str
+    candidates_saved: int
+    run_id: Optional[str] = None
+
+class CandidateClearResponse(BaseModel):
+    status: str
+    message: str
+
+class CandidateDetailResponse(BaseModel):
+    id: str
+    url: str
+    title: str
+    raw_text: Optional[str] = None
+    normalized_text: Optional[str] = None
+    discovered_at: Optional[str] = None
+    significance_score: Optional[float] = None
+    novelty_score: Optional[float] = None
+    evidence_score: Optional[float] = None
+    saturation_score: Optional[float] = None
+    feedback_bias: Optional[float] = None
+    composite_score: Optional[float] = None
+    selected: bool
+    rejected_reason: Optional[str] = None
+    cluster_id: Optional[str] = None
+    metadata_json: Optional[Dict[str, Any]] = None
+
+class EditorialOverrideResponse(BaseModel):
+    status: str
+    override_id: str
+    payload: Dict[str, Any]
+    recorded_at: str

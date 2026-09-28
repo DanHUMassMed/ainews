@@ -8,18 +8,13 @@ from pydantic import BaseModel, ConfigDict, field_validator
 from backend.app.schemas.source import SourceBase, SourceResponse
 from backend.app.schemas.category import CategoryResponse
 
+from backend.app.utils.text import strip_html as _shared_strip_html
+from backend.app.utils.dates import parse_datetime_flexible as _shared_parse_dt
+
 def _strip_html(v: Optional[str]) -> Optional[str]:
     if not v or not isinstance(v, str):
         return v
-    # Unpack CDATA first
-    t = re.sub(r"<!\[CDATA\[([\s\S]*?)\]\]>", r"\1", v)
-    t = html.unescape(t)
-    t = html.unescape(t)
-    t = re.sub(r"<script[^>]*>[\s\S]*?</script>", "", t, flags=re.IGNORECASE)
-    t = re.sub(r"<style[^>]*>[\s\S]*?</style>", "", t, flags=re.IGNORECASE)
-    t = re.sub(r"<[^>]+>", " ", t)
-    t = html.unescape(t)
-    return " ".join(t.split()).strip()
+    return _shared_strip_html(v)
 
 class StoryBase(BaseModel):
     slug: Optional[str] = None
@@ -40,27 +35,7 @@ class StoryBase(BaseModel):
     @field_validator("published_at", mode="before")
     @classmethod
     def parse_datetime_flexible(cls, v):
-        if v is None or v == "":
-            return None
-        if isinstance(v, datetime):
-            return v
-        if isinstance(v, str):
-            try:
-                dt = parsedate_to_datetime(v)
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
-                return dt
-            except Exception:
-                pass
-            try:
-                dt = datetime.fromisoformat(v.replace("Z", "+00:00"))
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
-                return dt
-            except Exception:
-                return None
-        return v
-
+        return _shared_parse_dt(v)
 class StoryCreate(StoryBase):
     sources: List[SourceBase] = []
     category_slugs: List[str] = []
@@ -88,6 +63,24 @@ class StoryResponse(StoryBase):
     updated_at: datetime
     published_at: Optional[datetime] = None
     sources: List[SourceResponse] = []
+    categories: List[CategoryResponse] = []
+
+    model_config = ConfigDict(from_attributes=True)
+
+class StoryListItem(BaseModel):
+    id: uuid.UUID
+    edition_id: uuid.UUID
+    slug: str
+    title: str
+    summary: str
+    why_it_matters: str
+    image_url: Optional[str] = None
+    is_lead: bool = False
+    position: int = 0
+    status: str
+    upvotes: int = 0
+    downvotes: int = 0
+    published_at: Optional[datetime] = None
     categories: List[CategoryResponse] = []
 
     model_config = ConfigDict(from_attributes=True)

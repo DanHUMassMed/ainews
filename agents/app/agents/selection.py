@@ -61,14 +61,8 @@ def extract_source_entity(candidate: Dict[str, Any]) -> str:
     pub = (candidate.get("publisher") or "").lower().strip()
 
     # Extract hostname domain from URL
-    domain = ""
-    if url:
-        try:
-            domain = urlparse(url if "://" in url else "https://" + url).netloc.lower()
-            if domain.startswith("www."):
-                domain = domain[4:]
-        except Exception:
-            domain = ""
+    from backend.app.utils.urls import extract_domain
+    domain = extract_domain(url) if url else ""
     if not domain and pub:
         domain = pub
 

@@ -1,15 +1,14 @@
-"""
-AI Industry News Daily - Editorial MCP Client
-Provides programmatic typed access to the Editorial MCP Server tools.
-"""
-
+import os
+import sys
+import json
 import asyncio
+import concurrent.futures
 from typing import Dict, Any, List, Optional
 from editorial_mcp.server import mcp_server
 
-class EditorialMCPClient:
-    """In-process and stdio-capable client for the Editorial MCP Server."""
 
+class EditorialMCPBase:
+    """Base class providing the raw tool dispatch mechanism for Editorial MCP clients."""
     def __init__(self, server=mcp_server):
         self.server = server
 
@@ -22,13 +21,22 @@ class EditorialMCPClient:
         if hasattr(res, "content") and res.content:
             first = res.content[0]
             if hasattr(first, "text"):
-                import json
+                try:
+                    return json.loads(first.text)
+                except Exception:
+                    return first.text
+        if isinstance(res, list) and len(res) > 0:
+            first = res[0]
+            if hasattr(first, "text"):
                 try:
                     return json.loads(first.text)
                 except Exception:
                     return first.text
         return res
 
+
+class EditorialReader(EditorialMCPBase):
+    """Read-only editorial interface for querying context, analytics, and history."""
     async def get_editorial_context(self, lookback_days: int = 28, days_lookback: Optional[int] = None) -> Dict[str, Any]:
         eff_days = days_lookback if days_lookback is not None else lookback_days
         return await self._call("get_editorial_context", {"lookback_days": eff_days})
@@ -42,6 +50,15 @@ class EditorialMCPClient:
     async def fetch_editorial_memory(self, memory_type: Optional[str] = None) -> List[Dict[str, Any]]:
         return await self._call("fetch_editorial_memory", {"memory_type": memory_type})
 
+    async def get_candidate_details(self, candidate_id: str) -> Dict[str, Any]:
+        return await self._call("get_candidate_details", {"candidate_id": candidate_id})
+
+    async def get_edition_status(self, edition_id: str) -> Dict[str, Any]:
+        return await self._call("get_edition_status", {"edition_id": edition_id})
+
+
+class CandidateSubmitter(EditorialMCPBase):
+    """Candidate submission interface for pipeline discovery and auditing."""
     async def submit_candidate_stories(
         self,
         candidates: List[Dict[str, Any]],
@@ -56,9 +73,11 @@ class EditorialMCPClient:
             "edition_date": edition_date,
         })
 
-    async def get_candidate_details(self, candidate_id: str) -> Dict[str, Any]:
-        return await self._call("get_candidate_details", {"candidate_id": candidate_id})
+    submit_candidates = submit_candidate_stories
 
+
+class EditionPublisher(EditorialMCPBase):
+    """Edition publishing and lifecycle management interface."""
     async def stage_edition_draft(
         self,
         date: Any = None,
@@ -85,17 +104,13 @@ class EditorialMCPClient:
             "stories": stories or [],
         })
 
-    async def get_edition_status(self, edition_id: str) -> Dict[str, Any]:
-        return await self._call("get_edition_status", {"edition_id": edition_id})
+    stage_draft = stage_edition_draft
 
     async def publish_edition(self, edition_id: str) -> Dict[str, Any]:
         return await self._call("publish_edition", {"edition_id": edition_id})
 
     async def unpublish_edition(self, edition_id: str) -> Dict[str, Any]:
         return await self._call("unpublish_edition", {"edition_id": edition_id})
-
-    submit_candidates = submit_candidate_stories
-    stage_draft = stage_edition_draft
 
     async def record_editorial_override(
         self,
@@ -116,43 +131,67 @@ class EditorialMCPClient:
         })
 
 
+class EditorialMCPClient(EditorialReader, CandidateSubmitter, EditionPublisher):
+    """Full-featured asynchronous Editorial MCP Client implementing segregated reader, submitter, and publisher roles."""
+    def __init__(self, server=mcp_server):
+        super().__init__(server=server)
+
+
 class EditorialMCPSyncClient:
-    """Synchronous convenience wrapper around EditorialMCPClient."""
+    """Synchronous convenience wrapper around EditorialMCPClient with loop-safe execution."""
+    _executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+
     def __init__(self, async_client: Optional[EditorialMCPClient] = None):
         self._async = async_client or EditorialMCPClient()
 
+    def _run_sync(self, coro_func, *args, **kwargs):
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop and loop.is_running():
+            return self._executor.submit(
+                lambda: asyncio.run(coro_func(*args, **kwargs))
+            ).result()
+        return asyncio.run(coro_func(*args, **kwargs))
+
+    # Reader methods
     def get_editorial_context(self, *args, **kwargs) -> Dict[str, Any]:
-        return asyncio.run(self._async.get_editorial_context(*args, **kwargs))
+        return self._run_sync(self._async.get_editorial_context, *args, **kwargs)
 
     def get_feedback_analytics(self, *args, **kwargs) -> Dict[str, Any]:
-        return asyncio.run(self._async.get_feedback_analytics(*args, **kwargs))
+        return self._run_sync(self._async.get_feedback_analytics, *args, **kwargs)
 
     def get_historical_feedback(self, *args, **kwargs) -> List[Dict[str, Any]]:
-        return asyncio.run(self._async.get_historical_feedback(*args, **kwargs))
+        return self._run_sync(self._async.get_historical_feedback, *args, **kwargs)
 
     def fetch_editorial_memory(self, *args, **kwargs) -> List[Dict[str, Any]]:
-        return asyncio.run(self._async.fetch_editorial_memory(*args, **kwargs))
-
-    def submit_candidate_stories(self, *args, **kwargs) -> Dict[str, Any]:
-        return asyncio.run(self._async.submit_candidate_stories(*args, **kwargs))
+        return self._run_sync(self._async.fetch_editorial_memory, *args, **kwargs)
 
     def get_candidate_details(self, *args, **kwargs) -> Dict[str, Any]:
-        return asyncio.run(self._async.get_candidate_details(*args, **kwargs))
-
-    def stage_edition_draft(self, *args, **kwargs) -> Dict[str, Any]:
-        return asyncio.run(self._async.stage_edition_draft(*args, **kwargs))
+        return self._run_sync(self._async.get_candidate_details, *args, **kwargs)
 
     def get_edition_status(self, *args, **kwargs) -> Dict[str, Any]:
-        return asyncio.run(self._async.get_edition_status(*args, **kwargs))
+        return self._run_sync(self._async.get_edition_status, *args, **kwargs)
 
-    def publish_edition(self, *args, **kwargs) -> Dict[str, Any]:
-        return asyncio.run(self._async.publish_edition(*args, **kwargs))
-
-    def unpublish_edition(self, *args, **kwargs) -> Dict[str, Any]:
-        return asyncio.run(self._async.unpublish_edition(*args, **kwargs))
+    # Submitter methods
+    def submit_candidate_stories(self, *args, **kwargs) -> Dict[str, Any]:
+        return self._run_sync(self._async.submit_candidate_stories, *args, **kwargs)
 
     submit_candidates = submit_candidate_stories
+
+    # Publisher methods
+    def stage_edition_draft(self, *args, **kwargs) -> Dict[str, Any]:
+        return self._run_sync(self._async.stage_edition_draft, *args, **kwargs)
+
     stage_draft = stage_edition_draft
 
+    def publish_edition(self, *args, **kwargs) -> Dict[str, Any]:
+        return self._run_sync(self._async.publish_edition, *args, **kwargs)
+
+    def unpublish_edition(self, *args, **kwargs) -> Dict[str, Any]:
+        return self._run_sync(self._async.unpublish_edition, *args, **kwargs)
+
     def record_editorial_override(self, *args, **kwargs) -> Dict[str, Any]:
-        return asyncio.run(self._async.record_editorial_override(*args, **kwargs))
+        return self._run_sync(self._async.record_editorial_override, *args, **kwargs)

@@ -1,6 +1,6 @@
 import re
 from datetime import datetime, timezone, timedelta, date
-from typing import Dict, Any, List, Set
+from typing import Dict, Any, List, Set, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -17,23 +17,28 @@ from backend.app.schemas.editorial import (
     ScoringThresholdsConfig,
 )
 
-COMMON_ENTITIES = [
-    "OpenAI", "Anthropic", "Google", "Meta", "Microsoft", "NVIDIA", "Apple",
-    "DeepSeek", "Mistral", "Cohere", "Amazon", "AMD", "Intel", "Hugging Face",
-    "xAI", "Cerebras", "Groq", "TSMC", "Alibaba", "Tencent", "Baidu"
-]
+from backend.app.core.taxonomy import get_common_entities
+
+# Dynamic entity list backed by config/taxonomy.json with fallback
+COMMON_ENTITIES = get_common_entities()
 
 class EditorialMemoryService:
     @staticmethod
     def extract_entities(text: str) -> Set[str]:
         found = set()
-        for ent in COMMON_ENTITIES:
+        for ent in get_common_entities():
             if re.search(r'\b' + re.escape(ent) + r'\b', text, re.IGNORECASE):
                 found.add(ent)
         return found
 
     @classmethod
-    async def get_editorial_context(cls, session: AsyncSession, days_lookback: int = 28) -> EditorialContextResponse:
+    async def get_editorial_context(
+        cls,
+        session: AsyncSession,
+        days_lookback: int = 28,
+        scoring_engine: Optional[Any] = None,
+        feedback_service: Optional[Any] = None,
+    ) -> EditorialContextResponse:
         cutoff = date.today() - timedelta(days=days_lookback)
         
         # Query recent published editions and stories
@@ -82,12 +87,14 @@ class EditorialMemoryService:
                 )
             )
 
-        cold_start = await FeedbackService.is_cold_start_active(session)
-        weights_dict = await ScoringEngine.get_active_weights(session, cold_start_active=cold_start)
+        _fb = feedback_service or FeedbackService
+        _sc = scoring_engine or ScoringEngine
+        cold_start = await _fb.is_cold_start_active(session)
+        weights_dict = await _sc.get_active_weights(session, cold_start_active=cold_start)
         weights_config = ScoringWeightsConfig(**weights_dict)
-        thresholds_dict = await ScoringEngine.get_active_thresholds(session)
+        thresholds_dict = await _sc.get_active_thresholds(session)
         thresholds_config = ScoringThresholdsConfig(**thresholds_dict)
-        feedback_analytics = await FeedbackService.get_analytics(session, window_days=days_lookback)
+        feedback_analytics = await _fb.get_analytics(session, window_days=days_lookback)
 
         return EditorialContextResponse(
             publication_date=date.today(),

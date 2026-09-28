@@ -26,7 +26,7 @@ except Exception:
     EDITORIAL_TOKEN = os.getenv("EDITORIAL_SECRET_KEY") or os.getenv("EDITORIAL_API_TOKEN", "editorial_secret_token_change_in_production")
 
 # Initialize MCP Server
-mcp_server = MCPServer(
+mcp_server = mcp = MCPServer(
     name="AI Industry News Editorial Interface",
     version="2.0.0",
     instructions="Editorial interface for AI Industry News Daily. Exposes editorial context, candidate submission, draft staging, publication gate verification, and reader feedback analytics."

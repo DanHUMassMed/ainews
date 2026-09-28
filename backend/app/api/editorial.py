@@ -27,6 +27,11 @@ from backend.app.schemas.editorial import (
     ScoringThresholdsConfig,
     ScoringConfigResponse,
     ScoringConfigUpdateRequest,
+    AdminAuthResponse,
+    CandidateBatchSubmitResponse,
+    CandidateClearResponse,
+    CandidateDetailResponse,
+    EditorialOverrideResponse,
 )
 from backend.app.schemas.feedback import FeedbackAnalyticsResponse
 from backend.app.schemas.candidate import (
@@ -47,7 +52,7 @@ router = APIRouter(prefix="/editorial", tags=["Hermes Editorial Skill API"])
 class AdminAuthRequest(BaseModel):
     password: str
 
-@router.post("/auth", response_model=Dict[str, Any])
+@router.post("/auth", response_model=AdminAuthResponse)
 async def verify_admin_auth(req: AdminAuthRequest):
     """Verify admin password to unlock Editorial Admin & Pipeline."""
     if req.password == settings.EDITORIAL_ADMIN_PASSWORD:
@@ -61,9 +66,7 @@ async def verify_admin_auth(req: AdminAuthRequest):
         detail="Invalid password. Access denied.",
     )
 
-def slugify(text: str) -> str:
-    slug = re.sub(r'[^a-zA-Z0-9\s-]', '', text.lower())
-    return re.sub(r'[\s-]+', '-', slug).strip('-')[:100]
+from backend.app.utils.text import slugify
 
 @router.post("/context", response_model=EditorialContextResponse)
 async def get_editorial_context(
@@ -81,7 +84,7 @@ async def get_feedback_analytics(
 ):
     return await FeedbackService.get_analytics(db, window_days=window_days)
 
-@router.post("/candidates", response_model=Dict[str, Any])
+@router.post("/candidates", response_model=CandidateBatchSubmitResponse)
 async def submit_candidate_stories(
     req: CandidateBatchSubmitRequest,
     db: AsyncSession = Depends(get_db),
@@ -151,7 +154,7 @@ async def list_candidates(
     res = await db.execute(stmt)
     return res.scalars().all()
 
-@router.delete("/candidates", response_model=Dict[str, Any])
+@router.delete("/candidates", response_model=CandidateClearResponse)
 async def clear_candidates(
     db: AsyncSession = Depends(get_db),
     _token: str = Security(verify_editorial_token),
@@ -395,7 +398,7 @@ async def unpublish_edition(
     )
 
 
-@router.get("/candidates/{candidate_id}", response_model=Dict[str, Any])
+@router.get("/candidates/{candidate_id}", response_model=CandidateDetailResponse)
 async def get_candidate_details(
     candidate_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
@@ -476,7 +479,7 @@ async def get_editorial_memory(
         for m in res.scalars().all()
     ]
 
-@router.post("/override", response_model=Dict[str, Any])
+@router.post("/override", response_model=EditorialOverrideResponse)
 async def record_editorial_override(
     payload: Dict[str, Any],
     db: AsyncSession = Depends(get_db),
