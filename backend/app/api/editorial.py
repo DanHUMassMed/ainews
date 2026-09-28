@@ -33,7 +33,7 @@ from backend.app.schemas.editorial import (
     CandidateDetailResponse,
     EditorialOverrideResponse,
 )
-from backend.app.schemas.feedback import FeedbackAnalyticsResponse
+from backend.app.schemas.feedback import FeedbackAnalyticsResponse, CategoryOverrideRequest, FeedbackVoteUpdateRequest
 from backend.app.schemas.candidate import (
     CandidateBatchSubmitRequest,
     CandidateResponse,
@@ -434,27 +434,52 @@ async def get_feedback_history(
     db: AsyncSession = Depends(get_db),
     _token: str = Security(verify_editorial_token),
 ):
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
-    stmt = (
-        select(Feedback)
-        .where(Feedback.created_at >= cutoff)
-        .order_by(desc(Feedback.created_at))
-        .limit(limit)
-        .options(selectinload(Feedback.story).selectinload(Story.categories))
+    return await FeedbackService.get_history(db, limit=limit, days=days)
+
+@router.put("/feedback/{feedback_id}", response_model=Dict[str, Any])
+async def update_feedback_vote(
+    feedback_id: uuid.UUID,
+    req: FeedbackVoteUpdateRequest,
+    db: AsyncSession = Depends(get_db),
+    _token: str = Security(verify_editorial_token),
+):
+    try:
+        return await FeedbackService.update_vote(db, feedback_id=feedback_id, new_vote=req.vote)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+@router.delete("/feedback/{feedback_id}", response_model=Dict[str, Any])
+async def delete_feedback_vote(
+    feedback_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    _token: str = Security(verify_editorial_token),
+):
+    try:
+        return await FeedbackService.delete_vote(db, feedback_id=feedback_id)
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(e))
+
+@router.post("/feedback/category-override", response_model=Dict[str, Any])
+async def set_category_feedback_override(
+    req: CategoryOverrideRequest,
+    db: AsyncSession = Depends(get_db),
+    _token: str = Security(verify_editorial_token),
+):
+    return await FeedbackService.set_category_override(
+        db,
+        slug=req.slug,
+        manual_bias=req.manual_bias,
+        active=req.active,
+        reason=req.reason,
     )
-    res = await db.execute(stmt)
-    records = []
-    for f in res.scalars().all():
-        records.append({
-            "id": str(f.id),
-            "story_id": str(f.story_id),
-            "story_title": f.story.title if f.story else None,
-            "vote": f.vote,
-            "session_id": f.session_id,
-            "created_at": f.created_at.isoformat() if f.created_at else None,
-            "categories": [c.name for c in f.story.categories] if f.story else [],
-        })
-    return records
+
+@router.delete("/feedback/category-override/{slug}", response_model=Dict[str, Any])
+async def delete_category_feedback_override(
+    slug: str,
+    db: AsyncSession = Depends(get_db),
+    _token: str = Security(verify_editorial_token),
+):
+    return await FeedbackService.delete_category_override(db, slug=slug)
 
 @router.get("/memory", response_model=List[Dict[str, Any]])
 async def get_editorial_memory(

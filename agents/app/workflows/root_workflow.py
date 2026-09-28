@@ -107,13 +107,21 @@ def resolve_candidate_feedback_bias(
 ) -> float:
     """
     Computes dynamic feedback bias [-3.0 to +3.0] for an incoming candidate story based on
-    reader feedback on 'like' stories in matching categories or topics.
+    reader feedback on 'like' stories in matching categories or topics, prioritizing editorial overrides.
     """
     if not feedback_analytics:
         return 0.0
 
+    cand_cats = [c.lower() for c in candidate.get("category_slugs", [])]
+    if candidate.get("category"):
+        cand_cats.append(candidate["category"].lower().replace(" ", "-"))
+
+    cat_overrides = feedback_analytics.get("category_overrides", {})
     categories_data = feedback_analytics.get("categories", [])
+
+    override_lookup = {}
     cat_lookup = {}
+
     for cat in categories_data:
         if isinstance(cat, dict):
             slug = str(cat.get("slug", "")).lower()
@@ -121,12 +129,22 @@ def resolve_candidate_feedback_bias(
             up = int(cat.get("upvotes", 0))
             down = int(cat.get("downvotes", 0))
             rate = float(cat.get("approval_rate", 0.5))
+            is_ovr = bool(cat.get("override_active", False))
+            ovr_bias = cat.get("override_bias")
         else:
             slug = str(getattr(cat, "slug", "")).lower()
             name = str(getattr(cat, "category_name", "")).lower().replace(" ", "-")
             up = int(getattr(cat, "upvotes", 0))
             down = int(getattr(cat, "downvotes", 0))
             rate = float(getattr(cat, "approval_rate", 0.5))
+            is_ovr = bool(getattr(cat, "override_active", False))
+            ovr_bias = getattr(cat, "override_bias", None)
+
+        if is_ovr and ovr_bias is not None:
+            if slug:
+                override_lookup[slug] = float(ovr_bias)
+            if name:
+                override_lookup[name] = float(ovr_bias)
 
         total_cat_votes = up + down
         if total_cat_votes >= min_category_votes:
@@ -135,16 +153,18 @@ def resolve_candidate_feedback_bias(
             if name:
                 cat_lookup[name] = rate
 
-    cand_cats = [c.lower() for c in candidate.get("category_slugs", [])]
-    if candidate.get("category"):
-        cand_cats.append(candidate["category"].lower().replace(" ", "-"))
+    if isinstance(cat_overrides, dict):
+        for o_slug, o_val in cat_overrides.items():
+            if isinstance(o_val, dict) and o_val.get("active", False):
+                override_lookup[str(o_slug).lower()] = float(o_val.get("manual_bias", 0.0))
 
-    matched_rates = []
-    for c in cand_cats:
-        if c in cat_lookup:
-            matched_rates.append(cat_lookup[c])
+    matched_overrides = [override_lookup[c] for c in cand_cats if c in override_lookup]
+    if matched_overrides:
+        avg_ovr = sum(matched_overrides) / len(matched_overrides)
+        return round(max(-3.0, min(3.0, avg_ovr)), 3)
 
-    # Check top positive / negative topic overrides if no specific category vote reached threshold
+    matched_rates = [cat_lookup[c] for c in cand_cats if c in cat_lookup]
+
     if not matched_rates:
         text = f"{candidate.get('title', '')} {candidate.get('summary', '')}".lower()
         pos_topics = [str(t).lower() for t in feedback_analytics.get("top_positive_topics", [])]

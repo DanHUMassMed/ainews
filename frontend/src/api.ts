@@ -77,6 +77,20 @@ export interface CandidateItem {
   };
 }
 
+export interface CategoryFeedbackItem {
+  category_name: string;
+  slug: string;
+  upvotes: number;
+  downvotes: number;
+  total_votes: number;
+  approval_rate: number;
+  raw_bias: number;
+  override_active: boolean;
+  override_bias?: number | null;
+  effective_bias: number;
+  override_reason?: string | null;
+}
+
 export interface FeedbackAnalytics {
   window_days: number;
   total_votes: number;
@@ -84,18 +98,29 @@ export interface FeedbackAnalytics {
   total_downvotes: number;
   overall_approval_rate: number;
   cold_start_active: boolean;
-  categories: Array<{
-    category_name: string;
-    slug: string;
-    upvotes: number;
-    downvotes: number;
-    approval_rate: number;
-  }>;
+  categories: CategoryFeedbackItem[];
   top_positive_topics: string[];
   top_negative_topics: string[];
+  category_overrides?: Record<string, {
+    manual_bias: number;
+    active: boolean;
+    reason?: string;
+    updated_at?: string;
+  }>;
 }
 
-const DEFAULT_HERMES_TOKEN = "hermes_editorial_secret_token_change_in_production";
+export interface FeedbackHistoryItem {
+  id: string;
+  story_id: string;
+  story_title: string;
+  story_slug?: string | null;
+  vote: number;
+  session_id: string;
+  created_at: string;
+  categories: Array<{ name: string; slug: string }>;
+}
+
+const DEFAULT_HERMES_TOKEN = "editorial_secret_token_change_in_production";
 
 export function getEditorialToken(): string {
   return sessionStorage.getItem("ainews_editorial_token") || DEFAULT_HERMES_TOKEN;
@@ -321,6 +346,74 @@ export async function fetchCategoryStories(slug: string): Promise<Story[]> {
   const res = await fetch(`/api/public/categories/${slug}`);
   if (!res.ok) {
     throw new Error(`Failed to load stories for category ${slug}`);
+  }
+  return res.json();
+}
+
+
+export async function fetchFeedbackHistory(limit: number = 50, days: number = 30): Promise<FeedbackHistoryItem[]> {
+  const res = await fetch(`/api/editorial/feedback-history?limit=${limit}&days=${days}`, {
+    headers: { Authorization: `Bearer ${getEditorialToken()}` },
+  });
+  if (!res.ok) {
+    throw new Error("Failed to fetch feedback history");
+  }
+  return res.json();
+}
+
+export async function updateFeedbackVote(feedbackId: string, vote: number): Promise<{ status: string; id: string; vote: number }> {
+  const res = await fetch(`/api/editorial/feedback/${feedbackId}`, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${getEditorialToken()}`,
+    },
+    body: JSON.stringify({ vote }),
+  });
+  if (!res.ok) {
+    throw new Error("Failed to update feedback vote");
+  }
+  return res.json();
+}
+
+export async function deleteFeedbackVote(feedbackId: string): Promise<{ status: string; id: string }> {
+  const res = await fetch(`/api/editorial/feedback/${feedbackId}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${getEditorialToken()}` },
+  });
+  if (!res.ok) {
+    throw new Error("Failed to delete feedback vote");
+  }
+  return res.json();
+}
+
+export async function setCategoryOverride(
+  slug: string,
+  manual_bias: number,
+  active: boolean = true,
+  reason: string = ""
+): Promise<Record<string, any>> {
+  const res = await fetch("/api/editorial/feedback/category-override", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${getEditorialToken()}`,
+    },
+    body: JSON.stringify({ slug, manual_bias, active, reason }),
+  });
+  if (!res.ok) {
+    throw new Error("Failed to set category override");
+  }
+  return res.json();
+}
+
+export async function deleteCategoryOverride(slug: string): Promise<Record<string, any>> {
+  const res = await fetch(`/api/editorial/feedback/category-override/${slug}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${getEditorialToken()}` },
+  });
+  if (!res.ok) {
+    throw new Error("Failed to delete category override");
   }
   return res.json();
 }

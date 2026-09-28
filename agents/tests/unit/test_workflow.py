@@ -324,3 +324,50 @@ def test_resolve_candidate_feedback_bias_like_stories():
     }
     bias_unknown = resolve_candidate_feedback_bias(cand_unknown, feedback_analytics)
     assert bias_unknown == 0.0
+
+def test_resolve_candidate_feedback_bias_with_editorial_override():
+    from agents.app.workflows.root_workflow import resolve_candidate_feedback_bias
+
+    # Feedback analytics where Enterprise AI is downvoted by readers, but overridden by editor
+    feedback_analytics = {
+        "cold_start_active": False,
+        "categories": [
+            {
+                "category_name": "Enterprise AI",
+                "slug": "enterprise-ai",
+                "upvotes": 1,
+                "downvotes": 9,
+                "approval_rate": 0.10,
+                "override_active": True,
+                "override_bias": 1.25,
+            },
+            {
+                "category_name": "Hardware",
+                "slug": "hardware",
+                "upvotes": 18,
+                "downvotes": 2,
+                "approval_rate": 0.90,
+                "override_active": False,
+                "override_bias": None,
+            },
+        ],
+        "category_overrides": {
+            "robotics": {
+                "manual_bias": 2.0,
+                "active": True,
+                "reason": "Prioritize robotics breakthrough",
+            }
+        },
+    }
+
+    # Candidate 1: Enterprise AI should use editorial override +1.25 instead of reader downvotes (-2.4)
+    cand_ent = {"title": "Enterprise Cloud Deployment", "category_slugs": ["enterprise-ai"]}
+    assert resolve_candidate_feedback_bias(cand_ent, feedback_analytics) == 1.25
+
+    # Candidate 2: Robotics should use top-level override +2.0
+    cand_rob = {"title": "New Bipedal Robot", "category_slugs": ["robotics"]}
+    assert resolve_candidate_feedback_bias(cand_rob, feedback_analytics) == 2.0
+
+    # Candidate 3: Hardware has no override, should use reader votes: 6.0 * (0.90 - 0.50) = 2.4
+    cand_hw = {"title": "Next Gen TPU", "category_slugs": ["hardware"]}
+    assert resolve_candidate_feedback_bias(cand_hw, feedback_analytics) == 2.4
